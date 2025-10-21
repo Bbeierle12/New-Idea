@@ -30,6 +30,78 @@ DEFAULT_AGENT_PROMPT = (
 )
 
 
+class SidebarPanel(ttk.Frame):
+    """Navigation sidebar with vertical tabs."""
+
+    def __init__(self, master: tk.Misc, on_section_change: callable) -> None:
+        super().__init__(master, padding=4, relief="raised", borderwidth=1)
+        self._on_section_change = on_section_change
+        self._buttons: dict[str, ttk.Button] = {}
+        self._current_section: Optional[str] = None
+        
+        # Configure layout
+        self.columnconfigure(0, weight=1)
+        
+        # Title
+        title_label = ttk.Label(self, text="GlyphX", font=("Segoe UI", 14, "bold"))
+        title_label.grid(row=0, column=0, pady=(8, 16), sticky="ew")
+        
+        # Separator
+        ttk.Separator(self, orient="horizontal").grid(row=1, column=0, sticky="ew", pady=8)
+        
+        # Navigation buttons
+        sections = [
+            ("📁 File", "file"),
+            ("🏷️ Glyphs", "glyphs"),
+            ("💬 Chat", "chat"),
+            ("🤖 Agent", "agent"),
+            ("📊 Console", "console"),
+            ("⚙️ Settings", "settings"),
+            ("📦 Data Archive", "archive"),
+        ]
+        
+        for idx, (label, section_id) in enumerate(sections):
+            btn = ttk.Button(
+                self,
+                text=label,
+                command=lambda s=section_id: self._select_section(s),
+                width=18,
+            )
+            btn.grid(row=idx + 2, column=0, pady=2, sticky="ew", padx=4)
+            self._buttons[section_id] = btn
+        
+        # Spacer
+        spacer = ttk.Frame(self)
+        spacer.grid(row=len(sections) + 2, column=0, sticky="nsew")
+        self.rowconfigure(len(sections) + 2, weight=1)
+        
+        # Bottom separator
+        ttk.Separator(self, orient="horizontal").grid(row=len(sections) + 3, column=0, sticky="ew", pady=8)
+        
+        # Version info at bottom
+        version_label = ttk.Label(self, text="v0.1.0", foreground="gray", font=("Segoe UI", 9))
+        version_label.grid(row=len(sections) + 4, column=0, pady=(0, 8))
+    
+    def _select_section(self, section_id: str) -> None:
+        """Handle section selection."""
+        if section_id == self._current_section:
+            return
+        
+        # Update button states
+        for sid, btn in self._buttons.items():
+            if sid == section_id:
+                btn.state(["pressed"])
+            else:
+                btn.state(["!pressed"])
+        
+        self._current_section = section_id
+        self._on_section_change(section_id)
+    
+    def set_section(self, section_id: str) -> None:
+        """Programmatically set the current section."""
+        self._select_section(section_id)
+
+
 class ConsolePanel(ttk.Frame):
     """Append-only text area for logs."""
 
@@ -998,16 +1070,41 @@ class Application:
     # Internal -------------------------------------------------------------
     def _setup_ui(self) -> None:
         self.root.option_add("*Font", ("Segoe UI", 11))
-        paned = ttk.PanedWindow(self.root, orient="horizontal")
-        paned.pack(fill="both", expand=True)
-
-        self.glyphs_panel = GlyphsPanel(paned, self.registry, self.worker, self.tools, self.logger, self.command_history)
-        paned.add(self.glyphs_panel, weight=1)
-
-        notebook = ttk.Notebook(paned)
-        self.console_panel = ConsolePanel(notebook)
+        
+        # Main container with sidebar
+        main_container = ttk.Frame(self.root)
+        main_container.pack(fill="both", expand=True)
+        main_container.columnconfigure(1, weight=1)
+        main_container.rowconfigure(0, weight=1)
+        
+        # Sidebar navigation
+        self.sidebar = SidebarPanel(main_container, self._on_sidebar_change)
+        self.sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 1))
+        
+        # Content area with all panels
+        self.content_frame = ttk.Frame(main_container)
+        self.content_frame.grid(row=0, column=1, sticky="nsew")
+        self.content_frame.columnconfigure(0, weight=1)
+        self.content_frame.rowconfigure(0, weight=1)
+        
+        # Create all panels (hidden initially)
+        self._panels: dict[str, tk.Widget] = {}
+        
+        # File panel (placeholder for now)
+        file_panel = ttk.Frame(self.content_frame, padding=20)
+        file_label = ttk.Label(file_panel, text="📁 File Operations", font=("Segoe UI", 16, "bold"))
+        file_label.pack(pady=20)
+        ttk.Button(file_panel, text="Import Glyphs…", command=self._import_glyphs, width=30).pack(pady=5)
+        ttk.Button(file_panel, text="Export Glyphs…", command=self._export_glyphs, width=30).pack(pady=5)
+        self._panels["file"] = file_panel
+        
+        # Glyphs panel
+        self.glyphs_panel = GlyphsPanel(self.content_frame, self.registry, self.worker, self.tools, self.logger, self.command_history)
+        self._panels["glyphs"] = self.glyphs_panel
+        
+        # Chat panel
         self.chat_panel = ChatPanel(
-            notebook,
+            self.content_frame,
             self.worker,
             self.llm_client,
             self.tools,
@@ -1015,8 +1112,11 @@ class Application:
             self.command_history,
             self.logger,
         )
+        self._panels["chat"] = self.chat_panel
+        
+        # Agent panel
         self.agent_panel = AgentPanel(
-            notebook,
+            self.content_frame,
             self.worker,
             self.llm_client,
             self.tools,
@@ -1024,14 +1124,48 @@ class Application:
             self.logger,
         )
         self.agent_panel.set_prompt(self._current_agent_prompt())
-        notebook.add(self.chat_panel, text="Chat")
-        notebook.add(self.agent_panel, text="Agent")
-        notebook.add(self.console_panel, text="Console")
-        paned.add(notebook, weight=3)
-
+        self._panels["agent"] = self.agent_panel
+        
+        # Console panel
+        self.console_panel = ConsolePanel(self.content_frame)
+        self._panels["console"] = self.console_panel
+        
+        # Settings panel (placeholder for now)
+        settings_panel = ttk.Frame(self.content_frame, padding=20)
+        settings_label = ttk.Label(settings_panel, text="⚙️ Settings", font=("Segoe UI", 16, "bold"))
+        settings_label.pack(pady=20)
+        ttk.Button(settings_panel, text="Open Settings Dialog", command=self._open_settings, width=30).pack(pady=5)
+        self._panels["settings"] = settings_panel
+        
+        # Archive panel (placeholder for future implementation)
+        archive_panel = ttk.Frame(self.content_frame, padding=20)
+        archive_label = ttk.Label(archive_panel, text="📦 Data Archive", font=("Segoe UI", 16, "bold"))
+        archive_label.pack(pady=20)
+        archive_info = ttk.Label(archive_panel, text="Data archiving features coming soon...", foreground="gray")
+        archive_info.pack(pady=10)
+        self._panels["archive"] = archive_panel
+        
+        # Show glyphs panel by default
+        self._show_panel("glyphs")
+        self.sidebar.set_section("glyphs")
+        
         self._build_menu()
         # populate list
         self.glyphs_panel.refresh()
+    
+    def _on_sidebar_change(self, section_id: str) -> None:
+        """Handle sidebar section changes."""
+        self._show_panel(section_id)
+    
+    def _show_panel(self, panel_id: str) -> None:
+        """Show the specified panel and hide others."""
+        # Hide all panels
+        for panel in self._panels.values():
+            panel.grid_forget()
+        
+        # Show the selected panel
+        if panel_id in self._panels:
+            self._panels[panel_id].grid(row=0, column=0, sticky="nsew")
 
     def _current_agent_prompt(self) -> str:
         settings = self.settings.get()

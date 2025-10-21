@@ -15,13 +15,35 @@ GlyphX is a cross-platform desktop companion for managing and sharing your favor
 
 ## Quick Start
 
+### Installation
 ```bash
 python -m venv .venv
 .venv\Scripts\activate  # Windows
 source .venv/bin/activate # macOS/Linux
 pip install -e .[dev]
+```
+
+### Running GlyphX
+
+**Option 1: Using the launcher scripts (easiest)**
+```bash
+# Windows
+run_glyphx.bat
+
+# macOS/Linux
+./run_glyphx.sh
+# or
+python run_glyphx.py
+```
+
+**Option 2: Direct command**
+```bash
 python -m glyphx.app
 ```
+
+**Option 3: VS Code Task (if using VS Code)**
+- Press `Ctrl+Shift+B` or
+- Press `Ctrl+Shift+P` → "Run Task" → "▶️ Run GlyphX"
 
 1. Open **Config > Settings...** (or press `Ctrl+,`) to enter your API key, preferred model, and base URL.
 2. Use the **Glyphs** panel (`Ctrl+N` to add) to define commands and double-click (or `Ctrl+R`) to run. Output is streamed to the Console tab.
