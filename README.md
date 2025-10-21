@@ -1,0 +1,87 @@
+# GlyphX
+
+GlyphX is a cross-platform desktop companion for managing and sharing your favorite shell commands (glyphs). The desktop app ships with a Tkinter UI, background task worker, Windows/macOS/Linux exporters, and an OpenAI-compatible chat experience that can call local tools (run glyphs, execute shell commands, read/write files). A one-shot agent loop can take a goal and iterate through tool calls to finish small tasks while logging every step.
+
+## Features (v0.1.0)
+
+![Main Window](docs/screenshots/main-window.png)
+
+- **Glyphs panel**: add/edit/remove glyphs, double-click or press `Ctrl+R` to run, inspect command/cwd previews, search by name/tags/cmd, and import/export as JSON.
+- **Exporters**: generate Windows `.bat`, macOS `.command`, and Linux `.desktop` launchers with safe filenames and executable bits.
+- **Chat tab**: configure API key/model/base URL, chat with the LLM (streamed responses), inspect tool calls (`[tool:*]`), and view token usage per exchange.
+- **Command history**: persistent log of the last 50 glyph/shell commands, visible alongside the glyph list.
+- **Agent tab**: run a one-shot agent loop with customizable system prompt that can call the same tools up to six steps before returning a concise summary.
+- **Worker + logging infra**: a dedicated background worker keeps the UI responsive, while structured logs accumulate in both the console pane and JSONL files (with automatic rotation).
+
+## Quick Start
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+source .venv/bin/activate # macOS/Linux
+pip install -e .[dev]
+python -m glyphx.app
+```
+
+1. Open **Config > Settings...** (or press `Ctrl+,`) to enter your API key, preferred model, and base URL.
+2. Use the **Glyphs** panel (`Ctrl+N` to add) to define commands and double-click (or `Ctrl+R`) to run. Output is streamed to the Console tab.
+3. Switch to **Chat** to ask the assistant to list glyphs, run commands, or edit files. Tool invocations are logged with a `[tool]` prefix and appended to chat history.
+4. Switch to **Agent** to give the one-shot loop a goal (e.g., “List glyphs and write them to glyphs.txt”) and review each tool call before the summary.
+5. Choose **File > Export...** to create OS-native launchers for your glyph library.
+
+Config, registry, logs, and chat history live in `%APPDATA%\glyphx\` on Windows (and the standard config directory on macOS/Linux).
+
+## Development
+
+- `make lint` — run Black, isort, Ruff, and mypy over the `glyphx` package.
+- `make test` — execute the pytest suite, including property tests powered by Hypothesis.
+
+Advanced configuration lives in Settings (LLM timeout, rate limit per minute, shell timeout, agent prompt). Logs rotate automatically and crash dumps write to `logs/crash.jsonl`.
+
+Additional helpers:
+
+- `pytest -k tools` to focus on the tool bridge.
+- `pytest --maxfail=1 -vv` for faster iteration on failing cases.
+
+## Documentation
+
+- [User Guide](docs/USER_GUIDE.md)
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Contributing Guide](docs/CONTRIBUTING.md)
+
+## Packaging
+
+The Makefile exposes cross-platform PyInstaller targets (plus a cleanup helper):
+
+```bash
+make bundle-win   # Windows executable
+make bundle-mac   # macOS app bundle
+make bundle-linux # Linux CLI binary
+make clean-bundles
+```
+
+Each target produces bundles under `dist/` that match the OS-specific GitHub Actions jobs.
+
+## Continuous Integration & Releases
+
+- `.github/workflows/ci.yml` runs lint/tests with coverage on Windows, macOS, and Linux, uploads `coverage.xml`, pushes results to Codecov (optional token), and builds PyInstaller artifacts for each OS.
+- `.github/workflows/nightly.yml` triggers at 03:00 UTC (and manually) to produce nightly bundles and attach them as workflow artifacts.
+- `.github/workflows/release.yml` builds platform bundles whenever a `v*` tag is pushed (or `workflow_dispatch`) and publishes them to the GitHub release automatically.
+
+Configure a `CODECOV_TOKEN` secret for private repos to enable coverage uploads.
+
+## Project Layout
+
+```
+glyphx/
+ ├─ app/
+ │   ├─ gui.py                 # Tkinter UI, chat, agent, menus
+ │   ├─ services/              # registry, exporters, tools, settings, llm client
+ │   └─ infra/                 # worker, logger, chat history, paths
+ ├─ tests/                     # pytest + hypothesis suites
+ └─ pyproject.toml             # packaging + dev extras
+```
+
+## License
+
+GlyphX is released under the MIT License. See `LICENSE` for details.

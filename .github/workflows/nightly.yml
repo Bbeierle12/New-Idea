@@ -1,0 +1,44 @@
+name: Nightly Bundles
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  nightly-build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: bundle-win
+            artifact: nightly-glyphx-windows
+            pattern: dist/glyphx.exe
+          - os: macos-latest
+            target: bundle-mac
+            artifact: nightly-glyphx-macos
+            pattern: dist/glyphx
+          - os: ubuntu-latest
+            target: bundle-linux
+            artifact: nightly-glyphx-linux
+            pattern: dist/glyphx
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+      - name: Build bundle
+        run: |
+          make clean-bundles
+          make ${{ matrix.target }}
+      - name: Upload nightly artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.pattern }}

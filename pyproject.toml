@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "glyphx"
+version = "0.1.0"
+description = "Desktop glyph runner with LLM-assisted tooling."
+authors = [{ name = "GlyphX Contributors" }]
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.31",
+]
+keywords = ["automation", "desktop", "llm", "tkinter"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: System :: Shells",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "hypothesis>=6.88",
+  "mypy>=1.7",
+  "types-requests",
+  "black>=23.11",
+  "isort>=5.12",
+  "ruff>=0.1.7",
+  "pyinstaller>=6.3",
+]
+
+[project.scripts]
+glyphx = "glyphx.app.__main__:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["glyphx"]
+
+[tool.ruff]
+select = ["E", "F", "I"]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --disable-warnings --cov=glyphx --cov-report=term-missing --cov-report=xml:coverage.xml"
+testpaths = ["glyphx/tests"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+strict = false
+plugins = []
