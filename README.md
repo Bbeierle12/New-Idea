@@ -8,6 +8,7 @@ GlyphX is a cross-platform desktop companion for managing and sharing your favor
 
 - **Glyphs panel**: add/edit/remove glyphs, double-click or press `Ctrl+R` to run, inspect command/cwd previews, search by name/tags/cmd, and import/export as JSON.
 - **Exporters**: generate Windows `.bat`, macOS `.command`, and Linux `.desktop` launchers with safe filenames and executable bits.
+- **Terminal panel**: interactive terminal emulator with command history, working directory management, color-coded output, and full shell command support—access your PC terminal directly within GlyphX.
 - **Chat tab**: configure API key/model/base URL, chat with the LLM (streamed responses), inspect tool calls (`[tool:*]`), and view token usage per exchange.
 - **Command history**: persistent log of the last 50 glyph/shell commands, visible alongside the glyph list.
 - **Agent tab**: run a one-shot agent loop with customizable system prompt that can call the same tools up to six steps before returning a concise summary.
@@ -47,9 +48,10 @@ python -m glyphx.app
 
 1. Open **Config > Settings...** (or press `Ctrl+,`) to enter your API key, preferred model, and base URL.
 2. Use the **Glyphs** panel (`Ctrl+N` to add) to define commands and double-click (or `Ctrl+R`) to run. Output is streamed to the Console tab.
-3. Switch to **Chat** to ask the assistant to list glyphs, run commands, or edit files. Tool invocations are logged with a `[tool]` prefix and appended to chat history.
-4. Switch to **Agent** to give the one-shot loop a goal (e.g., “List glyphs and write them to glyphs.txt”) and review each tool call before the summary.
-5. Choose **File > Export...** to create OS-native launchers for your glyph library.
+3. Switch to **Terminal** to execute shell commands interactively with full command history and working directory control.
+4. Switch to **Chat** to ask the assistant to list glyphs, run commands, or edit files. Tool invocations are logged with a `[tool]` prefix and appended to chat history.
+5. Switch to **Agent** to give the one-shot loop a goal (e.g., "List glyphs and write them to glyphs.txt") and review each tool call before the summary.
+6. Choose **File > Export...** to create OS-native launchers for your glyph library.
 
 Config, registry, logs, and chat history live in `%APPDATA%\glyphx\` on Windows (and the standard config directory on macOS/Linux).
 
@@ -68,6 +70,7 @@ Additional helpers:
 ## Documentation
 
 - [User Guide](docs/USER_GUIDE.md)
+- [Terminal Guide](docs/TERMINAL_GUIDE.md) — Complete guide to the built-in terminal feature
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Contributing Guide](docs/CONTRIBUTING.md)
 

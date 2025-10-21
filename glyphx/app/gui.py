@@ -55,7 +55,8 @@ class SidebarPanel(ttk.Frame):
             ("🏷️ Glyphs", "glyphs"),
             ("💬 Chat", "chat"),
             ("🤖 Agent", "agent"),
-            ("📊 Console", "console"),
+            ("� Terminal", "terminal"),
+            ("�📊 Console", "console"),
             ("⚙️ Settings", "settings"),
             ("📦 Data Archive", "archive"),
         ]
@@ -100,6 +101,244 @@ class SidebarPanel(ttk.Frame):
     def set_section(self, section_id: str) -> None:
         """Programmatically set the current section."""
         self._select_section(section_id)
+
+
+class TerminalPanel(ttk.Frame):
+    """Interactive terminal emulator panel."""
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        tools: ToolsBridge,
+        worker: Worker,
+        logger: Logger,
+        command_history: CommandHistory,
+    ) -> None:
+        super().__init__(master, padding=8)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+        self._tools = tools
+        self._worker = worker
+        self._logger = logger
+        self._command_history = command_history
+        self._is_running = False
+        self._cwd_var = tk.StringVar(value=str(Path.cwd()))
+
+        # Header with working directory
+        header = ttk.Frame(self)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        header.columnconfigure(1, weight=1)
+        
+        ttk.Label(header, text="Working Directory:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        cwd_entry = ttk.Entry(header, textvariable=self._cwd_var)
+        cwd_entry.grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        ttk.Button(header, text="Browse…", command=self._browse_cwd).grid(row=0, column=2)
+        ttk.Button(header, text="Clear", command=self._clear_output).grid(row=0, column=3, padx=(8, 0))
+
+        # Output display
+        output_frame = ttk.Frame(self)
+        output_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
+        output_frame.columnconfigure(0, weight=1)
+        output_frame.rowconfigure(0, weight=1)
+
+        self._output = tk.Text(
+            output_frame,
+            wrap="word",
+            state="disabled",
+            height=20,
+            font=("Consolas", 10),
+            bg="#1e1e1e",
+            fg="#d4d4d4",
+            insertbackground="#ffffff",
+        )
+        output_scroll = ttk.Scrollbar(output_frame, command=self._output.yview)
+        self._output.configure(yscrollcommand=output_scroll.set)
+        self._output.grid(row=0, column=0, sticky="nsew")
+        output_scroll.grid(row=0, column=1, sticky="ns")
+
+        # Configure text tags for colored output
+        self._output.tag_config("prompt", foreground="#569cd6", font=("Consolas", 10, "bold"))
+        self._output.tag_config("command", foreground="#9cdcfe")
+        self._output.tag_config("stdout", foreground="#d4d4d4")
+        self._output.tag_config("stderr", foreground="#f48771")
+        self._output.tag_config("error", foreground="#f48771", font=("Consolas", 10, "bold"))
+        self._output.tag_config("success", foreground="#4ec9b0")
+
+        # Command input
+        input_frame = ttk.Frame(self)
+        input_frame.grid(row=2, column=0, sticky="ew")
+        input_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(input_frame, text="$", font=("Consolas", 10, "bold")).grid(row=0, column=0, padx=(0, 8))
+        self._input = ttk.Entry(input_frame, font=("Consolas", 10))
+        self._input.grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        self._input.bind("<Return>", self._on_execute)
+        self._input.bind("<Up>", self._history_prev)
+        self._input.bind("<Down>", self._history_next)
+
+        self._run_button = ttk.Button(input_frame, text="Run", command=self._on_execute)
+        self._run_button.grid(row=0, column=2)
+
+        self._history_index = -1
+        self._history_cache: list[str] = []
+        
+        # Initial prompt
+        self._append_prompt()
+
+    def _browse_cwd(self) -> None:
+        """Browse for working directory."""
+        from tkinter import filedialog
+        directory = filedialog.askdirectory(
+            parent=self.winfo_toplevel(),
+            title="Select Working Directory",
+            initialdir=self._cwd_var.get(),
+        )
+        if directory:
+            self._cwd_var.set(directory)
+
+    def _clear_output(self) -> None:
+        """Clear the terminal output."""
+        self._output.configure(state="normal")
+        self._output.delete("1.0", "end")
+        self._output.configure(state="disabled")
+        self._append_prompt()
+
+    def _append_prompt(self) -> None:
+        """Append a command prompt."""
+        cwd = Path(self._cwd_var.get()).name or self._cwd_var.get()
+        self._output.configure(state="normal")
+        self._output.insert("end", f"\n{cwd} ", "prompt")
+        self._output.insert("end", "$ ", "prompt")
+        self._output.configure(state="disabled")
+        self._output.see("end")
+
+    def _append_text(self, text: str, tag: str = "stdout") -> None:
+        """Append text to the output."""
+        self._output.configure(state="normal")
+        self._output.insert("end", text, tag)
+        self._output.configure(state="disabled")
+        self._output.see("end")
+
+    def _history_prev(self, _event: object = None) -> None:
+        """Navigate to previous command in history."""
+        if not self._history_cache:
+            self._history_cache = [
+                rec.command for rec in self._command_history.tail()
+                if rec.source in ("terminal", "chat", "agent")
+            ]
+        if not self._history_cache:
+            return
+        
+        if self._history_index < len(self._history_cache) - 1:
+            self._history_index += 1
+            self._input.delete(0, "end")
+            self._input.insert(0, self._history_cache[-(self._history_index + 1)])
+
+    def _history_next(self, _event: object = None) -> None:
+        """Navigate to next command in history."""
+        if self._history_index > 0:
+            self._history_index -= 1
+            self._input.delete(0, "end")
+            self._input.insert(0, self._history_cache[-(self._history_index + 1)])
+        elif self._history_index == 0:
+            self._history_index = -1
+            self._input.delete(0, "end")
+
+    def _on_execute(self, *_args: object) -> None:
+        """Execute the command."""
+        if self._is_running:
+            return
+        
+        command = self._input.get().strip()
+        if not command:
+            return
+
+        # Handle built-in commands
+        if command.lower() in ("clear", "cls"):
+            self._clear_output()
+            self._input.delete(0, "end")
+            return
+
+        if command.lower().startswith("cd "):
+            new_dir = command[3:].strip()
+            try:
+                new_path = Path(new_dir).expanduser().resolve()
+                if new_path.is_dir():
+                    self._cwd_var.set(str(new_path))
+                    self._append_text(command + "\n", "command")
+                    self._append_prompt()
+                else:
+                    self._append_text(command + "\n", "command")
+                    self._append_text(f"cd: not a directory: {new_dir}\n", "error")
+                    self._append_prompt()
+            except Exception as exc:
+                self._append_text(command + "\n", "command")
+                self._append_text(f"cd: {exc}\n", "error")
+                self._append_prompt()
+            self._input.delete(0, "end")
+            return
+
+        # Display command
+        self._append_text(command + "\n", "command")
+        self._input.delete(0, "end")
+        self._set_running(True)
+        
+        # Save to history
+        self._command_history.append("terminal", command)
+        self._history_index = -1
+        self._history_cache = []
+
+        # Log command
+        self._logger.info("terminal_exec", command=command, cwd=self._cwd_var.get())
+
+        # Execute command via worker
+        def job() -> dict[str, str]:
+            try:
+                return self._tools.run_shell(command, cwd=self._cwd_var.get())
+            except Exception as exc:
+                return {
+                    "label": "error",
+                    "returncode": "-1",
+                    "stdout": "",
+                    "stderr": f"Execution error: {exc}",
+                }
+
+        def callback(result: dict[str, str]) -> None:
+            def display() -> None:
+                self._set_running(False)
+                
+                # Display output
+                stdout = result.get("stdout", "")
+                stderr = result.get("stderr", "")
+                returncode = result.get("returncode", "0")
+
+                if stdout:
+                    self._append_text(stdout, "stdout")
+                    if not stdout.endswith("\n"):
+                        self._append_text("\n", "stdout")
+                
+                if stderr:
+                    self._append_text(stderr, "stderr")
+                    if not stderr.endswith("\n"):
+                        self._append_text("\n", "stderr")
+
+                # Show exit code if non-zero
+                if returncode != "0":
+                    self._append_text(f"[Exit code: {returncode}]\n", "error")
+                
+                self._append_prompt()
+                self._input.focus_set()
+
+            self.after(0, display)
+
+        self._worker.submit(job, description="terminal_command", callback=callback)
+
+    def _set_running(self, running: bool) -> None:
+        """Update UI state during command execution."""
+        self._is_running = running
+        state = tk.DISABLED if running else tk.NORMAL
+        self._input.configure(state=state)
+        self._run_button.configure(state=state)
 
 
 class ConsolePanel(ttk.Frame):
@@ -1125,6 +1364,16 @@ class Application:
         )
         self.agent_panel.set_prompt(self._current_agent_prompt())
         self._panels["agent"] = self.agent_panel
+        
+        # Terminal panel
+        self.terminal_panel = TerminalPanel(
+            self.content_frame,
+            self.tools,
+            self.worker,
+            self.logger,
+            self.command_history,
+        )
+        self._panels["terminal"] = self.terminal_panel
         
         # Console panel
         self.console_panel = ConsolePanel(self.content_frame)
