@@ -1286,38 +1286,49 @@ class SettingsDialog(tk.Toplevel):
         frame.grid(row=0, column=0, sticky="nsew")
         frame.columnconfigure(0, weight=1)
 
-        ttk.Label(frame, text="API Key").grid(row=0, column=0, sticky="w")
+        # Preset buttons at the top
+        preset_frame = ttk.LabelFrame(frame, text="Quick Presets", padding=8)
+        preset_frame.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        preset_frame.columnconfigure(0, weight=1)
+        preset_frame.columnconfigure(1, weight=1)
+        preset_frame.columnconfigure(2, weight=1)
+        
+        ttk.Button(preset_frame, text="🤖 OpenAI", command=self._preset_openai).grid(row=0, column=0, padx=2, sticky="ew")
+        ttk.Button(preset_frame, text="🦙 Ollama", command=self._preset_ollama).grid(row=0, column=1, padx=2, sticky="ew")
+        ttk.Button(preset_frame, text="🔧 Custom", command=self._preset_custom).grid(row=0, column=2, padx=2, sticky="ew")
+
+        ttk.Label(frame, text="API Key (leave empty for Ollama)").grid(row=1, column=0, sticky="w")
         entry_api = ttk.Entry(frame, textvariable=self._var_api_key, show="*", width=50)
-        entry_api.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        entry_api.grid(row=2, column=0, sticky="ew", pady=(0, 12))
 
-        ttk.Label(frame, text="Model").grid(row=2, column=0, sticky="w")
+        ttk.Label(frame, text="Model").grid(row=3, column=0, sticky="w")
         entry_model = ttk.Entry(frame, textvariable=self._var_model)
-        entry_model.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        entry_model.grid(row=4, column=0, sticky="ew", pady=(0, 12))
 
-        ttk.Label(frame, text="Base URL").grid(row=4, column=0, sticky="w")
+        ttk.Label(frame, text="Base URL").grid(row=5, column=0, sticky="w")
         entry_url = ttk.Entry(frame, textvariable=self._var_base_url)
-        entry_url.grid(row=5, column=0, sticky="ew", pady=(0, 12))
+        entry_url.grid(row=6, column=0, sticky="ew", pady=(0, 12))
 
-        ttk.Label(frame, text="LLM timeout (seconds)").grid(row=6, column=0, sticky="w")
+        ttk.Label(frame, text="LLM timeout (seconds)").grid(row=7, column=0, sticky="w")
         entry_llm_timeout = ttk.Entry(frame, textvariable=self._var_llm_timeout)
-        entry_llm_timeout.grid(row=7, column=0, sticky="ew", pady=(0, 8))
+        entry_llm_timeout.grid(row=8, column=0, sticky="ew", pady=(0, 8))
 
-        ttk.Label(frame, text="LLM rate limit per minute (optional)").grid(row=8, column=0, sticky="w")
+        ttk.Label(frame, text="LLM rate limit per minute (optional)").grid(row=9, column=0, sticky="w")
         entry_rate = ttk.Entry(frame, textvariable=self._var_rate_limit)
-        entry_rate.grid(row=9, column=0, sticky="ew", pady=(0, 8))
+        entry_rate.grid(row=10, column=0, sticky="ew", pady=(0, 8))
 
-        ttk.Label(frame, text="Shell timeout (seconds)").grid(row=10, column=0, sticky="w")
+        ttk.Label(frame, text="Shell timeout (seconds)").grid(row=11, column=0, sticky="w")
         entry_shell_timeout = ttk.Entry(frame, textvariable=self._var_shell_timeout)
-        entry_shell_timeout.grid(row=11, column=0, sticky="ew", pady=(0, 12))
+        entry_shell_timeout.grid(row=12, column=0, sticky="ew", pady=(0, 12))
 
-        ttk.Label(frame, text="Agent system prompt").grid(row=12, column=0, sticky="w")
+        ttk.Label(frame, text="Agent system prompt").grid(row=13, column=0, sticky="w")
         self._agent_prompt_text = tk.Text(frame, height=4, wrap="word")
-        self._agent_prompt_text.grid(row=13, column=0, sticky="ew", pady=(0, 12))
+        self._agent_prompt_text.grid(row=14, column=0, sticky="ew", pady=(0, 12))
         initial_prompt = self._settings.agent_prompt or DEFAULT_AGENT_PROMPT
         self._agent_prompt_text.insert("1.0", initial_prompt)
 
         btns = ttk.Frame(frame)
-        btns.grid(row=14, column=0, sticky="e")
+        btns.grid(row=15, column=0, sticky="e")
         btn_save = ttk.Button(btns, text="Save", command=self._on_save)
         btn_cancel = ttk.Button(btns, text="Cancel", command=self._on_cancel)
         btn_save.grid(row=0, column=0, padx=(0, 8))
@@ -1329,6 +1340,58 @@ class SettingsDialog(tk.Toplevel):
 
     def show(self) -> None:
         self.wait_window(self)
+
+    def _preset_openai(self) -> None:
+        """Apply OpenAI preset configuration."""
+        self._var_base_url.set("https://api.openai.com/v1")
+        self._var_model.set("gpt-4o-mini")
+        self._var_llm_timeout.set("60.0")
+        self._var_rate_limit.set("60")
+        # Keep existing API key
+        messagebox.showinfo(
+            "OpenAI Preset",
+            "Applied OpenAI configuration:\n\n"
+            "• Base URL: https://api.openai.com/v1\n"
+            "• Model: gpt-4o-mini\n"
+            "• Timeout: 60s\n"
+            "• Rate Limit: 60/min\n\n"
+            "Don't forget to set your API key!",
+            parent=self
+        )
+
+    def _preset_ollama(self) -> None:
+        """Apply Ollama preset configuration for local models."""
+        self._var_api_key.set("")  # Ollama doesn't need API key
+        self._var_base_url.set("http://localhost:11434/v1")
+        self._var_model.set("llama3.2")
+        self._var_llm_timeout.set("120.0")
+        self._var_rate_limit.set("")  # No rate limit for local
+        messagebox.showinfo(
+            "Ollama Preset",
+            "Applied Ollama configuration:\n\n"
+            "• Base URL: http://localhost:11434/v1\n"
+            "• Model: llama3.2\n"
+            "• Timeout: 120s\n"
+            "• Rate Limit: None (local model)\n"
+            "• API Key: Not required\n\n"
+            "Make sure Ollama is running:\n"
+            "  ollama serve\n"
+            "  ollama pull llama3.2",
+            parent=self
+        )
+
+    def _preset_custom(self) -> None:
+        """Show info about custom configuration."""
+        messagebox.showinfo(
+            "Custom Configuration",
+            "Configure your custom LLM provider:\n\n"
+            "• Enter your API endpoint in Base URL\n"
+            "• Set your model name\n"
+            "• Add API key if required\n"
+            "• Adjust timeouts as needed\n\n"
+            "Compatible with any OpenAI-compatible API.",
+            parent=self
+        )
 
     def _on_save(self) -> None:
         data = {

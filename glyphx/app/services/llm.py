@@ -90,7 +90,10 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """Send a chat completion request to the configured endpoint."""
         config = self._settings.get()
-        if not config.api_key:
+        
+        # API key is optional for local models (e.g., Ollama)
+        # Only check if base_url suggests it's a remote service
+        if not config.api_key and "localhost" not in config.base_url and "127.0.0.1" not in config.base_url:
             raise RuntimeError("API key is not configured yet.")
 
         # Enforce rate limiting before making the request
@@ -110,9 +113,12 @@ class LLMClient:
 
         url = config.base_url.rstrip("/") + "/chat/completions"
         headers = {
-            "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json",
         }
+        
+        # Only add Authorization header if API key is provided
+        if config.api_key:
+            headers["Authorization"] = f"Bearer {config.api_key}"
 
         backoff = self._backoff
         last_error: Optional[Exception] = None
@@ -172,7 +178,9 @@ class LLMClient:
             Complete response dict with aggregated content and tool calls
         """
         config = self._settings.get()
-        if not config.api_key:
+        
+        # API key is optional for local models (e.g., Ollama)
+        if not config.api_key and "localhost" not in config.base_url and "127.0.0.1" not in config.base_url:
             raise RuntimeError("API key is not configured yet.")
 
         # Enforce rate limiting before making the request
@@ -193,9 +201,12 @@ class LLMClient:
 
         url = config.base_url.rstrip("/") + "/chat/completions"
         headers = {
-            "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json",
         }
+        
+        # Only add Authorization header if API key is provided
+        if config.api_key:
+            headers["Authorization"] = f"Bearer {config.api_key}"
 
         self._logger.info("llm_stream_request", url=url, model=config.model)
         
