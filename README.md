@@ -13,6 +13,7 @@ GlyphX is a cross-platform desktop companion for managing and sharing your favor
 - **Command history**: persistent log of the last 50 glyph/shell commands, visible alongside the glyph list.
 - **Agent tab**: run a one-shot agent loop with customizable system prompt that can call the same tools up to six steps before returning a concise summary.
 - **Worker + logging infra**: a dedicated background worker keeps the UI responsive, while structured logs accumulate in both the console pane and JSONL files (with automatic rotation).
+- **🤖 Gemma Background Worker**: Optional local AI assistant for auto-tagging glyphs, generating descriptions, summarizing terminal sessions, and more—all running offline via Ollama. [Learn more](docs/GEMMA_GUIDE.md)
 
 ## Quick Start
 

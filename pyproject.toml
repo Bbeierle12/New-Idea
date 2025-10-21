@@ -12,6 +12,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "requests>=2.31",
+  "openai>=1.0",
 ]
 keywords = ["automation", "desktop", "llm", "tkinter"]
 classifiers = [

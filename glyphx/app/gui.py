@@ -21,6 +21,11 @@ from .infra.worker import Worker
 from .services.registry import Glyph, GlyphCreate, RegistryService
 from .services.settings import SettingsService
 from .services.tools import ToolsBridge
+from .services.auto_tagger import AutoTagger
+from .services.description_generator import DescriptionGenerator
+from .services.session_summarizer import SessionSummarizer
+from .services.intent_parser import IntentParser
+from .services.classifier import CommandClassifier
 
 
 DEFAULT_AGENT_PROMPT = (
@@ -113,6 +118,7 @@ class TerminalPanel(ttk.Frame):
         worker: Worker,
         logger: Logger,
         command_history: CommandHistory,
+        session_summarizer=None,
     ) -> None:
         super().__init__(master, padding=8)
         self.columnconfigure(0, weight=1)
@@ -121,6 +127,7 @@ class TerminalPanel(ttk.Frame):
         self._worker = worker
         self._logger = logger
         self._command_history = command_history
+        self._session_summarizer = session_summarizer
         self._is_running = False
         self._cwd_var = tk.StringVar(value=str(Path.cwd()))
 
@@ -134,6 +141,10 @@ class TerminalPanel(ttk.Frame):
         cwd_entry.grid(row=0, column=1, sticky="ew", padx=(0, 8))
         ttk.Button(header, text="Browse…", command=self._browse_cwd).grid(row=0, column=2)
         ttk.Button(header, text="Clear", command=self._clear_output).grid(row=0, column=3, padx=(8, 0))
+        
+        # Add Summarize button if session summarizer is available
+        if self._session_summarizer:
+            ttk.Button(header, text="📝 Summarize", command=self._summarize_session).grid(row=0, column=4, padx=(8, 0))
 
         # Output display
         output_frame = ttk.Frame(self)
@@ -332,6 +343,33 @@ class TerminalPanel(ttk.Frame):
             self.after(0, display)
 
         self._worker.submit(job, description="terminal_command", callback=callback)
+    
+    def _summarize_session(self) -> None:
+        """Summarize recent terminal commands using Gemma."""
+        if not self._session_summarizer:
+            return
+        
+        def job():
+            try:
+                return self._session_summarizer.summarize_recent(self._command_history, limit=10)
+            except Exception as exc:
+                return f"Error generating summary: {exc}"
+        
+        def callback(result):
+            if isinstance(result, Exception):
+                messagebox.showerror(
+                    "Session Summary",
+                    f"Failed to generate summary: {result}",
+                    parent=self.winfo_toplevel()
+                )
+            else:
+                messagebox.showinfo(
+                    "Session Summary",
+                    result,
+                    parent=self.winfo_toplevel()
+                )
+        
+        self._worker.submit(job, description="summarize_session", callback=callback)
 
     def _set_running(self, running: bool) -> None:
         """Update UI state during command execution."""
@@ -376,6 +414,8 @@ class GlyphsPanel(ttk.Frame):
         tools: ToolsBridge,
         logger: Logger,
         history: CommandHistory,
+        auto_tagger=None,
+        description_generator=None,
     ) -> None:
         super().__init__(master, padding=8)
         self.columnconfigure(0, weight=1)
@@ -385,6 +425,8 @@ class GlyphsPanel(ttk.Frame):
         self._tools = tools
         self._logger = logger
         self._history_service = history
+        self._auto_tagger = auto_tagger
+        self._description_generator = description_generator
         self._all_items: list[Glyph] = []
         self._items: list[Glyph] = []
         self._details_var = tk.StringVar(value="Double-click a glyph to run it.")
@@ -472,7 +514,12 @@ class GlyphsPanel(ttk.Frame):
         self._details_var.set(summary)
 
     def _add_glyph(self) -> None:
-        dialog = GlyphDialog(self.winfo_toplevel(), title="Add Glyph")
+        dialog = GlyphDialog(
+            self.winfo_toplevel(), 
+            title="Add Glyph",
+            auto_tagger=self._auto_tagger,
+            description_generator=self._description_generator,
+        )
         result = dialog.show()
         if result is None:
             return
@@ -484,7 +531,13 @@ class GlyphsPanel(ttk.Frame):
         glyph = self._selected_glyph()
         if not glyph:
             return
-        dialog = GlyphDialog(self.winfo_toplevel(), title="Edit Glyph", initial=glyph)
+        dialog = GlyphDialog(
+            self.winfo_toplevel(), 
+            title="Edit Glyph", 
+            initial=glyph,
+            auto_tagger=self._auto_tagger,
+            description_generator=self._description_generator,
+        )
         result = dialog.show()
         if result is None:
             return
@@ -609,12 +662,17 @@ class GlyphDialog(tk.Toplevel):
         *,
         title: str,
         initial: Optional[Glyph] = None,
+        auto_tagger=None,
+        description_generator=None,
     ) -> None:
         super().__init__(master)
         self.title(title)
         self.resizable(False, False)
         self.transient(master)
         self.grab_set()
+
+        self._auto_tagger = auto_tagger
+        self._description_generator = description_generator
 
         self._var_name = tk.StringVar(value=initial.name if initial else "")
         self._var_emoji = tk.StringVar(value=initial.emoji if initial else "")
@@ -646,17 +704,69 @@ class GlyphDialog(tk.Toplevel):
         ent_cwd.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 8))
 
         ttk.Label(frm, text="Tags (comma separated)").grid(row=8, column=0, sticky="w")
-        ent_tags = ttk.Entry(frm, textvariable=self._var_tags)
-        ent_tags.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        
+        # AI-assisted tagging row
+        tag_row = ttk.Frame(frm)
+        tag_row.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        tag_row.columnconfigure(0, weight=1)
+        
+        ent_tags = ttk.Entry(tag_row, textvariable=self._var_tags)
+        ent_tags.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        
+        if self._auto_tagger:
+            btn_suggest_tags = ttk.Button(
+                tag_row, 
+                text="🤖 Suggest", 
+                width=12,
+                command=self._suggest_tags
+            )
+            btn_suggest_tags.grid(row=0, column=1, sticky="e")
+        
+        # AI description hint (if generator available)
+        if self._description_generator:
+            self._lbl_description = ttk.Label(
+                frm, 
+                text="💡 Tip: Leave command blank and click Save to auto-generate", 
+                foreground="gray",
+                font=("TkDefaultFont", 8, "italic")
+            )
+            self._lbl_description.grid(row=10, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         btn_save = ttk.Button(frm, text="Save", command=self._on_save)
         btn_cancel = ttk.Button(frm, text="Cancel", command=self._on_cancel)
-        btn_save.grid(row=10, column=0, sticky="e", padx=(0, 8))
-        btn_cancel.grid(row=10, column=1, sticky="w")
+        btn_save.grid(row=11, column=0, sticky="e", padx=(0, 8))
+        btn_cancel.grid(row=11, column=1, sticky="w")
 
         self.bind("<Return>", lambda _e: self._on_save())
         self.bind("<Escape>", lambda _e: self._on_cancel())
         ent_name.focus_set()
+
+    def _suggest_tags(self) -> None:
+        """Use Gemma to suggest tags based on command."""
+        command = self._var_cmd.get().strip()
+        name = self._var_name.get().strip()
+        
+        if not command:
+            messagebox.showinfo("Auto-Tag", "Enter a command first.", parent=self)
+            return
+
+        try:
+            if name:
+                suggested = self._auto_tagger.suggest_from_name_and_command(name, command)
+            else:
+                suggested = self._auto_tagger.suggest_tags(command)
+            
+            if suggested:
+                current = self._var_tags.get().strip()
+                if current:
+                    combined = f"{current}, {', '.join(suggested)}"
+                else:
+                    combined = ", ".join(suggested)
+                self._var_tags.set(combined)
+            else:
+                messagebox.showinfo("Auto-Tag", "No tags suggested. Make sure Gemma is running.", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Auto-Tag", f"Failed: {exc}", parent=self)
 
     def show(self) -> Optional[GlyphCreate]:
         self.wait_window(self)
@@ -1297,11 +1407,40 @@ class Application:
         self.crash_reporter.install()
         self.update_checker = UpdateChecker("0.1.0", self.logger)
 
+        # Initialize Gemma background worker services
+        self._init_gemma_services()
+
         self._setup_ui()
         self._wire_logger()
         self.worker.start()
         self.update_checker.schedule(self.worker, delay=5.0)
         self._bootstrap_worker()
+    
+    def _init_gemma_services(self) -> None:
+        """Initialize Gemma-powered background services if enabled."""
+        cfg = self.settings.get()
+        
+        if cfg.gemma_enabled:
+            try:
+                self.auto_tagger = AutoTagger(cfg.gemma_base_url, cfg.gemma_model)
+                self.description_generator = DescriptionGenerator(cfg.gemma_base_url, cfg.gemma_model)
+                self.session_summarizer = SessionSummarizer(cfg.gemma_base_url, cfg.gemma_model)
+                self.intent_parser = IntentParser(cfg.gemma_base_url, cfg.gemma_model)
+                self.classifier = CommandClassifier(cfg.gemma_base_url, cfg.gemma_model)
+                self.logger.info("gemma_services_enabled", model=cfg.gemma_model)
+            except Exception as exc:
+                self.logger.warning("gemma_services_failed", error=str(exc))
+                self.auto_tagger = None
+                self.description_generator = None
+                self.session_summarizer = None
+                self.intent_parser = None
+                self.classifier = None
+        else:
+            self.auto_tagger = None
+            self.description_generator = None
+            self.session_summarizer = None
+            self.intent_parser = None
+            self.classifier = None
 
     def run(self) -> None:
         self.root.mainloop()
@@ -1338,7 +1477,16 @@ class Application:
         self._panels["file"] = file_panel
         
         # Glyphs panel
-        self.glyphs_panel = GlyphsPanel(self.content_frame, self.registry, self.worker, self.tools, self.logger, self.command_history)
+        self.glyphs_panel = GlyphsPanel(
+            self.content_frame, 
+            self.registry, 
+            self.worker, 
+            self.tools, 
+            self.logger, 
+            self.command_history,
+            auto_tagger=self.auto_tagger,
+            description_generator=self.description_generator,
+        )
         self._panels["glyphs"] = self.glyphs_panel
         
         # Chat panel
@@ -1372,6 +1520,7 @@ class Application:
             self.worker,
             self.logger,
             self.command_history,
+            session_summarizer=self.session_summarizer,
         )
         self._panels["terminal"] = self.terminal_panel
         
@@ -1530,6 +1679,11 @@ class SettingsDialog(tk.Toplevel):
         self._var_llm_timeout = tk.StringVar(value=str(self._settings.llm_timeout))
         self._var_rate_limit = tk.StringVar(value="" if self._settings.llm_rate_limit_per_minute is None else str(self._settings.llm_rate_limit_per_minute))
         self._var_shell_timeout = tk.StringVar(value=str(self._settings.shell_timeout))
+        
+        # Gemma settings
+        self._var_gemma_enabled = tk.BooleanVar(value=self._settings.gemma_enabled)
+        self._var_gemma_base_url = tk.StringVar(value=self._settings.gemma_base_url)
+        self._var_gemma_model = tk.StringVar(value=self._settings.gemma_model)
 
         frame = ttk.Frame(self, padding=16)
         frame.grid(row=0, column=0, sticky="nsew")
@@ -1576,8 +1730,25 @@ class SettingsDialog(tk.Toplevel):
         initial_prompt = self._settings.agent_prompt or DEFAULT_AGENT_PROMPT
         self._agent_prompt_text.insert("1.0", initial_prompt)
 
+        # Gemma Background Worker Settings
+        gemma_frame = ttk.LabelFrame(frame, text="🤖 Gemma Background Worker (Optional)", padding=8)
+        gemma_frame.grid(row=15, column=0, sticky="ew", pady=(0, 12))
+        gemma_frame.columnconfigure(1, weight=1)
+        
+        ttk.Checkbutton(
+            gemma_frame, 
+            text="Enable Gemma for auto-tagging, descriptions, and summaries",
+            variable=self._var_gemma_enabled
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        
+        ttk.Label(gemma_frame, text="Gemma Base URL:").grid(row=1, column=0, sticky="w", padx=(20, 8))
+        ttk.Entry(gemma_frame, textvariable=self._var_gemma_base_url).grid(row=1, column=1, sticky="ew", pady=(0, 4))
+        
+        ttk.Label(gemma_frame, text="Gemma Model:").grid(row=2, column=0, sticky="w", padx=(20, 8))
+        ttk.Entry(gemma_frame, textvariable=self._var_gemma_model).grid(row=2, column=1, sticky="ew")
+
         btns = ttk.Frame(frame)
-        btns.grid(row=15, column=0, sticky="e")
+        btns.grid(row=16, column=0, sticky="e")
         btn_save = ttk.Button(btns, text="Save", command=self._on_save)
         btn_cancel = ttk.Button(btns, text="Cancel", command=self._on_cancel)
         btn_save.grid(row=0, column=0, padx=(0, 8))
@@ -1651,6 +1822,9 @@ class SettingsDialog(tk.Toplevel):
             "llm_timeout": self._var_llm_timeout.get().strip() or str(self._settings.llm_timeout),
             "llm_rate_limit_per_minute": self._var_rate_limit.get().strip() or None,
             "shell_timeout": self._var_shell_timeout.get().strip() or str(self._settings.shell_timeout),
+            "gemma_enabled": self._var_gemma_enabled.get(),
+            "gemma_base_url": self._var_gemma_base_url.get().strip() or "http://localhost:11434/v1",
+            "gemma_model": self._var_gemma_model.get().strip() or "gemma:300m",
         }
         if data["agent_prompt"] == DEFAULT_AGENT_PROMPT:
             data["agent_prompt"] = None
@@ -1659,6 +1833,15 @@ class SettingsDialog(tk.Toplevel):
         except ValueError as exc:
             messagebox.showerror("Settings", str(exc), parent=self)
             return
+        
+        # Notify user that app restart is recommended for Gemma changes
+        if self._settings.gemma_enabled != data["gemma_enabled"]:
+            messagebox.showinfo(
+                "Settings Saved",
+                "Gemma settings updated. Restart GlyphX for changes to take effect.",
+                parent=self
+            )
+        
         self.destroy()
 
     def _on_cancel(self) -> None:

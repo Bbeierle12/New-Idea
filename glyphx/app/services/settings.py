@@ -20,6 +20,10 @@ class Settings:
     llm_timeout: float = 60.0
     llm_rate_limit_per_minute: Optional[int] = None
     shell_timeout: float = 600.0
+    # Gemma background worker settings
+    gemma_enabled: bool = False
+    gemma_base_url: str = "http://localhost:11434/v1"
+    gemma_model: str = "gemma:300m"
 
     def to_dict(self) -> Dict[str, Optional[str]]:
         """Return a JSON-serializable representation of the settings."""
@@ -31,6 +35,9 @@ class Settings:
             "llm_timeout": self.llm_timeout,
             "llm_rate_limit_per_minute": self.llm_rate_limit_per_minute,
             "shell_timeout": self.shell_timeout,
+            "gemma_enabled": self.gemma_enabled,
+            "gemma_base_url": self.gemma_base_url,
+            "gemma_model": self.gemma_model,
         }
 
     @staticmethod
@@ -42,6 +49,9 @@ class Settings:
         llm_timeout = payload.get("llm_timeout", 60.0)
         shell_timeout = payload.get("shell_timeout", 600.0)
         rate_limit = payload.get("llm_rate_limit_per_minute")
+        gemma_enabled = payload.get("gemma_enabled", False)
+        gemma_base_url = payload.get("gemma_base_url", "http://localhost:11434/v1")
+        gemma_model = payload.get("gemma_model", "gemma:300m")
         return Settings(
             api_key=str(api_key) if api_key else None,
             model=str(model),
@@ -50,6 +60,9 @@ class Settings:
             llm_timeout=float(llm_timeout) if llm_timeout is not None else 60.0,
             llm_rate_limit_per_minute=int(rate_limit) if rate_limit not in (None, "") else None,
             shell_timeout=float(shell_timeout) if shell_timeout is not None else 600.0,
+            gemma_enabled=bool(gemma_enabled),
+            gemma_base_url=str(gemma_base_url),
+            gemma_model=str(gemma_model),
         )
 
 
