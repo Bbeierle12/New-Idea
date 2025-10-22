@@ -58,8 +58,7 @@ class SidebarPanel(ttk.Frame):
         sections = [
             ("📁 File", "file"),
             ("🏷️ Glyphs", "glyphs"),
-            ("💬 AI Chat", "chat"),
-            ("💻 Terminal", "terminal"),
+            ("💬 Terminal & AI", "terminal"),
             ("📊 Console", "console"),
             ("⚙️ Settings", "settings"),
             ("📦 Data Archive", "archive"),
@@ -1716,6 +1715,73 @@ def _truncate_tool_result(content: str, max_bytes: int = 8000) -> str:
     return truncated + "\n\n[... truncated for token efficiency]"
 
 
+class CombinedTerminalAIPanel(ttk.Frame):
+    """Combined Terminal and AI Chat panel with split view (VS Code style)."""
+    
+    def __init__(
+        self,
+        master: tk.Misc,
+        worker: Worker,
+        llm_client: LLMClient,
+        tools: ToolsBridge,
+        chat_history: ChatHistory,
+        command_history: CommandHistory,
+        logger: Logger,
+        *,
+        session_summarizer=None,
+        settings_service: Optional['SettingsService'] = None,
+    ) -> None:
+        super().__init__(master)
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+        
+        # Create a PanedWindow for resizable split
+        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        paned.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        
+        # Left side: Terminal
+        terminal_frame = ttk.Frame(paned, padding=4)
+        terminal_frame.columnconfigure(0, weight=1)
+        terminal_frame.rowconfigure(0, weight=1)
+        
+        self.terminal_panel = TerminalPanel(
+            terminal_frame,
+            tools,
+            worker,
+            logger,
+            command_history,
+            session_summarizer=session_summarizer,
+            llm_client=llm_client,
+        )
+        self.terminal_panel.grid(row=0, column=0, sticky="nsew")
+        
+        # Right side: AI Chat
+        ai_frame = ttk.Frame(paned, padding=4)
+        ai_frame.columnconfigure(0, weight=1)
+        ai_frame.rowconfigure(0, weight=1)
+        
+        self.ai_panel = AIPanel(
+            ai_frame,
+            worker,
+            llm_client,
+            tools,
+            chat_history,
+            command_history,
+            logger,
+            settings_service=settings_service,
+        )
+        self.ai_panel.grid(row=0, column=0, sticky="nsew")
+        
+        # Add frames to paned window
+        paned.add(terminal_frame, weight=1)
+        paned.add(ai_frame, weight=1)
+    
+    def set_prompt(self, prompt: Optional[str]) -> None:
+        """Set the agent system prompt on the AI panel."""
+        self.ai_panel.set_prompt(prompt)
+
+
 class Application:
     """Main application wiring."""
 
@@ -1833,8 +1899,8 @@ class Application:
         )
         self._panels["glyphs"] = self.glyphs_panel
         
-        # AI Chat panel (unified chat and agent)
-        self.chat_panel = AIPanel(
+        # Combined Terminal & AI Chat panel (VS Code style split view)
+        self.combined_panel = CombinedTerminalAIPanel(
             self.content_frame,
             self.worker,
             self.llm_client,
@@ -1842,22 +1908,15 @@ class Application:
             self.chat_history,
             self.command_history,
             self.logger,
+            session_summarizer=self.session_summarizer,
             settings_service=self.settings,
         )
-        self.chat_panel.set_prompt(self._current_agent_prompt())
-        self._panels["chat"] = self.chat_panel
+        self.combined_panel.set_prompt(self._current_agent_prompt())
+        self._panels["terminal"] = self.combined_panel
         
-        # Terminal panel
-        self.terminal_panel = TerminalPanel(
-            self.content_frame,
-            self.tools,
-            self.worker,
-            self.logger,
-            self.command_history,
-            session_summarizer=self.session_summarizer,
-            llm_client=self.llm_client,
-        )
-        self._panels["terminal"] = self.terminal_panel
+        # Keep references for backward compatibility
+        self.terminal_panel = self.combined_panel.terminal_panel
+        self.chat_panel = self.combined_panel.ai_panel
         
         # Console panel
         self.console_panel = ConsolePanel(self.content_frame)
@@ -1907,7 +1966,7 @@ class Application:
     def _on_settings_changed(self) -> None:
         current = self.settings.get()
         self.tools.set_shell_timeout(current.shell_timeout)
-        self.chat_panel.set_prompt(self._current_agent_prompt())
+        self.combined_panel.set_prompt(self._current_agent_prompt())
 
     def _build_menu(self) -> None:
         menu = tk.Menu(self.root)
