@@ -403,7 +403,12 @@ Be concise and practical. Assume the user is on Windows using PowerShell."""
         def job():
             try:
                 response = self._llm_client.chat(messages, stream=False)
-                return response.get("content", "")
+                # Extract content from OpenAI API response format
+                choices = response.get("choices", [])
+                if choices:
+                    message = choices[0].get("message", {})
+                    return message.get("content", "")
+                return ""
             except Exception as exc:
                 return f"AI Error: {exc}"
         
