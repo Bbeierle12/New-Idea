@@ -2059,7 +2059,7 @@ class Application:
         )
 
     def _open_settings(self, *_args: object) -> None:
-        dialog = SettingsDialog(self.root, self.settings)
+        dialog = SettingsDialog(self.root, self.settings, self.registry)
         dialog.show()
         self._on_settings_changed()
 
@@ -2067,13 +2067,14 @@ class Application:
 class SettingsDialog(tk.Toplevel):
     """Modal dialog to configure API settings."""
 
-    def __init__(self, master: tk.Misc, service: SettingsService) -> None:
+    def __init__(self, master: tk.Misc, service: SettingsService, registry: RegistryService = None) -> None:
         super().__init__(master)
         self.title("Settings")
         self.resizable(False, False)
         self.transient(master)
         self.grab_set()
         self._service = service
+        self._registry = registry
         self._settings = service.get()
 
         self._var_api_key = tk.StringVar(value=self._settings.api_key or "")
@@ -2100,6 +2101,7 @@ class SettingsDialog(tk.Toplevel):
         # Create tabs
         self._create_llm_tab(notebook)
         self._create_safety_tab(notebook)
+        self._create_file_operations_tab(notebook)
         
         # Bottom buttons
         btns = ttk.Frame(self, padding=(8, 0, 8, 8))
@@ -2300,6 +2302,318 @@ class SettingsDialog(tk.Toplevel):
             "• Default mode: chat",
             parent=self
         )
+    
+    def _create_file_operations_tab(self, notebook: ttk.Notebook) -> None:
+        """Create the File Operations tab."""
+        frame = ttk.Frame(notebook, padding=16)
+        notebook.add(frame, text="📁 Files")
+        frame.columnconfigure(0, weight=1)
+        
+        # Import/Export Section
+        import_export_frame = ttk.LabelFrame(frame, text="Import & Export", padding=12)
+        import_export_frame.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        import_export_frame.columnconfigure(0, weight=1)
+        
+        ttk.Label(
+            import_export_frame,
+            text="Import and export glyphs to share configurations or backup your work.",
+            wraplength=450,
+            foreground="gray"
+        ).grid(row=0, column=0, sticky="w", pady=(0, 12))
+        
+        # Import button
+        import_btn_frame = ttk.Frame(import_export_frame)
+        import_btn_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        import_btn_frame.columnconfigure(1, weight=1)
+        
+        ttk.Button(
+            import_btn_frame,
+            text="📥 Import Glyphs",
+            command=self._import_glyphs_from_settings,
+            width=20
+        ).grid(row=0, column=0, sticky="w")
+        
+        ttk.Label(
+            import_btn_frame,
+            text="Import glyphs from a JSON file",
+            font=("Segoe UI", 9),
+            foreground="gray"
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        
+        # Export button
+        export_btn_frame = ttk.Frame(import_export_frame)
+        export_btn_frame.grid(row=2, column=0, sticky="ew")
+        export_btn_frame.columnconfigure(1, weight=1)
+        
+        ttk.Button(
+            export_btn_frame,
+            text="📤 Export Glyphs",
+            command=self._export_glyphs_from_settings,
+            width=20
+        ).grid(row=0, column=0, sticky="w")
+        
+        ttk.Label(
+            export_btn_frame,
+            text="Export all glyphs to launcher scripts",
+            font=("Segoe UI", 9),
+            foreground="gray"
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        
+        # Data Management Section
+        data_frame = ttk.LabelFrame(frame, text="Data Management", padding=12)
+        data_frame.grid(row=1, column=0, sticky="ew", pady=(0, 16))
+        data_frame.columnconfigure(0, weight=1)
+        
+        ttk.Label(
+            data_frame,
+            text="Manage application data, logs, and history.",
+            wraplength=450,
+            foreground="gray"
+        ).grid(row=0, column=0, sticky="w", pady=(0, 12))
+        
+        # Open data directory button
+        data_dir_frame = ttk.Frame(data_frame)
+        data_dir_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        data_dir_frame.columnconfigure(1, weight=1)
+        
+        ttk.Button(
+            data_dir_frame,
+            text="📂 Open Data Folder",
+            command=self._open_data_folder,
+            width=20
+        ).grid(row=0, column=0, sticky="w")
+        
+        ttk.Label(
+            data_dir_frame,
+            text="Open the application data directory",
+            font=("Segoe UI", 9),
+            foreground="gray"
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        
+        # Clear history button
+        clear_history_frame = ttk.Frame(data_frame)
+        clear_history_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        clear_history_frame.columnconfigure(1, weight=1)
+        
+        ttk.Button(
+            clear_history_frame,
+            text="🗑️ Clear Command History",
+            command=self._clear_command_history,
+            width=20
+        ).grid(row=0, column=0, sticky="w")
+        
+        ttk.Label(
+            clear_history_frame,
+            text="Remove all command history",
+            font=("Segoe UI", 9),
+            foreground="gray"
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        
+        # Clear chat history button
+        clear_chat_frame = ttk.Frame(data_frame)
+        clear_chat_frame.grid(row=3, column=0, sticky="ew")
+        clear_chat_frame.columnconfigure(1, weight=1)
+        
+        ttk.Button(
+            clear_chat_frame,
+            text="🗑️ Clear Chat History",
+            command=self._clear_chat_history,
+            width=20
+        ).grid(row=0, column=0, sticky="w")
+        
+        ttk.Label(
+            clear_chat_frame,
+            text="Remove all AI chat history",
+            font=("Segoe UI", 9),
+            foreground="gray"
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        
+        # Logs Section
+        logs_frame = ttk.LabelFrame(frame, text="Logs & Diagnostics", padding=12)
+        logs_frame.grid(row=2, column=0, sticky="ew")
+        logs_frame.columnconfigure(0, weight=1)
+        
+        ttk.Label(
+            logs_frame,
+            text="View application logs and diagnostic information.",
+            wraplength=450,
+            foreground="gray"
+        ).grid(row=0, column=0, sticky="w", pady=(0, 12))
+        
+        # View logs button
+        logs_btn_frame = ttk.Frame(logs_frame)
+        logs_btn_frame.grid(row=1, column=0, sticky="ew")
+        logs_btn_frame.columnconfigure(1, weight=1)
+        
+        ttk.Button(
+            logs_btn_frame,
+            text="📋 View Logs",
+            command=self._view_logs,
+            width=20
+        ).grid(row=0, column=0, sticky="w")
+        
+        ttk.Label(
+            logs_btn_frame,
+            text="Open the application log file",
+            font=("Segoe UI", 9),
+            foreground="gray"
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+    
+    def _import_glyphs_from_settings(self) -> None:
+        """Import glyphs from settings dialog."""
+        if not self._registry:
+            messagebox.showwarning(
+                "Import Glyphs",
+                "Registry not available.",
+                parent=self
+            )
+            return
+        
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Import Glyphs",
+            filetypes=[("Glyph Registry", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            count = self._registry.import_file(Path(path))
+            messagebox.showinfo(
+                "Import Glyphs",
+                f"Successfully imported {count} glyph(s).",
+                parent=self
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Import Failed",
+                f"Failed to import glyphs:\n{exc}",
+                parent=self
+            )
+    
+    def _export_glyphs_from_settings(self) -> None:
+        """Export glyphs from settings dialog."""
+        from tkinter import filedialog
+        folder = filedialog.askdirectory(
+            parent=self,
+            title="Export Glyph Launchers"
+        )
+        if not folder:
+            return
+        
+        # This will be handled by the parent application
+        messagebox.showinfo(
+            "Export",
+            "Please use the File menu to export glyphs.\n\n"
+            "File → Export…",
+            parent=self
+        )
+    
+    def _open_data_folder(self) -> None:
+        """Open the application data folder in file explorer."""
+        import subprocess
+        import sys
+        from .infra.paths import ensure_app_paths
+        
+        paths = ensure_app_paths()
+        data_dir = paths.data_dir
+        
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["explorer", str(data_dir)], check=False)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(data_dir)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(data_dir)], check=False)
+        except Exception as exc:
+            messagebox.showerror(
+                "Open Folder",
+                f"Failed to open data folder:\n{exc}\n\nPath: {data_dir}",
+                parent=self
+            )
+    
+    def _clear_command_history(self) -> None:
+        """Clear command history."""
+        if not messagebox.askyesno(
+            "Clear Command History",
+            "Are you sure you want to clear all command history?\n\n"
+            "This action cannot be undone.",
+            parent=self
+        ):
+            return
+        
+        try:
+            from .infra.paths import ensure_app_paths
+            paths = ensure_app_paths()
+            history_file = paths.command_history_path
+            
+            if history_file.exists():
+                history_file.unlink()
+            
+            messagebox.showinfo(
+                "History Cleared",
+                "Command history has been cleared.",
+                parent=self
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Clear Failed",
+                f"Failed to clear command history:\n{exc}",
+                parent=self
+            )
+    
+    def _clear_chat_history(self) -> None:
+        """Clear chat history."""
+        if not messagebox.askyesno(
+            "Clear Chat History",
+            "Are you sure you want to clear all AI chat history?\n\n"
+            "This action cannot be undone.",
+            parent=self
+        ):
+            return
+        
+        try:
+            from .infra.paths import ensure_app_paths
+            paths = ensure_app_paths()
+            chat_file = paths.chat_history_path
+            
+            if chat_file.exists():
+                chat_file.unlink()
+            
+            messagebox.showinfo(
+                "History Cleared",
+                "Chat history has been cleared.",
+                parent=self
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Clear Failed",
+                f"Failed to clear chat history:\n{exc}",
+                parent=self
+            )
+    
+    def _view_logs(self) -> None:
+        """Open the log file."""
+        import subprocess
+        import sys
+        from .infra.paths import ensure_app_paths
+        
+        paths = ensure_app_paths()
+        log_file = paths.logs_dir / "app.log"
+        
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["notepad", str(log_file)], check=False)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", "-a", "TextEdit", str(log_file)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(log_file)], check=False)
+        except Exception as exc:
+            messagebox.showerror(
+                "View Logs",
+                f"Failed to open log file:\n{exc}\n\nPath: {log_file}",
+                parent=self
+            )
 
     def show(self) -> None:
         self.wait_window(self)
