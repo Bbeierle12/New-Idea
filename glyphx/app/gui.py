@@ -1733,12 +1733,11 @@ class CombinedTerminalAIPanel(ttk.Frame):
     ) -> None:
         super().__init__(master)
         self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
         
-        # Create a PanedWindow for resizable split
+        # Create a PanedWindow for resizable split (can collapse terminal completely)
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        paned.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        paned.grid(row=0, column=0, sticky="nsew")
         
         # Left side: Terminal
         terminal_frame = ttk.Frame(paned, padding=4)
@@ -1774,8 +1773,13 @@ class CombinedTerminalAIPanel(ttk.Frame):
         self.ai_panel.grid(row=0, column=0, sticky="nsew")
         
         # Add frames to paned window
+        # Terminal can collapse to 0 width, AI chat always visible
         paned.add(terminal_frame, weight=1)
         paned.add(ai_frame, weight=1)
+        
+        # Configure the sash to allow complete collapse of terminal panel
+        # This allows dragging the divider all the way to the left
+        self._paned = paned
     
     def set_prompt(self, prompt: Optional[str]) -> None:
         """Set the agent system prompt on the AI panel."""
