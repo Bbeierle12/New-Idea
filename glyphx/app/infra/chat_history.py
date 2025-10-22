@@ -15,6 +15,7 @@ class ChatRecord:
     role: str
     content: str
     meta: Dict[str, Any]
+    mode: str | None = None
 
     def to_json(self) -> str:
         payload = {
@@ -22,6 +23,8 @@ class ChatRecord:
             "role": self.role,
             "content": self.content,
         }
+        if self.mode:
+            payload["mode"] = self.mode
         if self.meta:
             payload["meta"] = self.meta
         return json.dumps(payload, ensure_ascii=False)
@@ -35,9 +38,9 @@ class ChatHistory:
         self._lock = threading.Lock()
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
-    def append(self, role: str, content: str, **meta: Any) -> None:
-        """Append a single chat message with optional metadata."""
-        record = ChatRecord(role=role, content=content, meta=meta)
+    def append(self, role: str, content: str, mode: str | None = None, **meta: Any) -> None:
+        """Append a single chat message with optional mode and metadata."""
+        record = ChatRecord(role=role, content=content, meta=meta, mode=mode)
         line = record.to_json()
         with self._lock:
             with self._path.open("a", encoding="utf-8") as fh:

@@ -24,6 +24,10 @@ class Settings:
     gemma_enabled: bool = False
     gemma_base_url: str = "http://localhost:11434/v1"
     gemma_model: str = "gemma:300m"
+    # Safety and context management settings
+    tool_output_max_bytes: int = 8000
+    context_truncation_enabled: bool = True
+    default_mode: str = "chat"  # "chat" or "agent"
 
     def to_dict(self) -> Dict[str, Optional[str]]:
         """Return a JSON-serializable representation of the settings."""
@@ -38,6 +42,9 @@ class Settings:
             "gemma_enabled": self.gemma_enabled,
             "gemma_base_url": self.gemma_base_url,
             "gemma_model": self.gemma_model,
+            "tool_output_max_bytes": self.tool_output_max_bytes,
+            "context_truncation_enabled": self.context_truncation_enabled,
+            "default_mode": self.default_mode,
         }
 
     @staticmethod
@@ -52,6 +59,9 @@ class Settings:
         gemma_enabled = payload.get("gemma_enabled", False)
         gemma_base_url = payload.get("gemma_base_url", "http://localhost:11434/v1")
         gemma_model = payload.get("gemma_model", "gemma:300m")
+        tool_output_max_bytes = payload.get("tool_output_max_bytes", 8000)
+        context_truncation_enabled = payload.get("context_truncation_enabled", True)
+        default_mode = payload.get("default_mode", "chat")
         return Settings(
             api_key=str(api_key) if api_key else None,
             model=str(model),
@@ -63,6 +73,9 @@ class Settings:
             gemma_enabled=bool(gemma_enabled),
             gemma_base_url=str(gemma_base_url),
             gemma_model=str(gemma_model),
+            tool_output_max_bytes=int(tool_output_max_bytes) if tool_output_max_bytes is not None else 8000,
+            context_truncation_enabled=bool(context_truncation_enabled),
+            default_mode=str(default_mode) if default_mode in ("chat", "agent") else "chat",
         )
 
 
@@ -151,6 +164,22 @@ class SettingsService:
                     if limit <= 0:
                         raise ValueError("Rate limit must be positive.")
                     validated[key] = limit
+            elif key == "tool_output_max_bytes" and value is not None:
+                try:
+                    max_bytes = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Tool output max bytes must be an integer.") from exc
+                if max_bytes < 1000:
+                    raise ValueError("Tool output max bytes must be at least 1000 (1KB).")
+                if max_bytes > 100000:
+                    raise ValueError("Tool output max bytes cannot exceed 100000 (100KB).")
+                validated[key] = max_bytes
+            elif key == "context_truncation_enabled" and value is not None:
+                validated[key] = bool(value)
+            elif key == "default_mode" and value is not None:
+                if value not in ("chat", "agent"):
+                    raise ValueError("Default mode must be 'chat' or 'agent'.")
+                validated[key] = value
             else:
                 validated[key] = value
         return validated

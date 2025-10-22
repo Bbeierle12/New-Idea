@@ -2,10 +2,10 @@
 
 ## Layers
 
-1. **UI Layer (Tkinter)** – `glyphx/app/gui.py`
+1. **UI Layer (Tkinter)** â€“ `glyphx/app/gui.py`
    - `GlyphsPanel`: CRUD and execution for saved glyphs.
-   - `ChatPanel`: OpenAI-compatible chat with tool-calling, streaming transcripts, and token usage reporting.
-   - `AgentPanel`: One-shot agent loop using the same tool bridge.
+   - `AIPanel`: Unified chat and agent interface with mode toggle. OpenAI-compatible chat with tool-calling, streaming transcripts, and one-shot agent execution.
+   - `TerminalPanel`: Interactive shell with command history and AI assistant mode.
    - `ConsolePanel`: Structured log viewer.
 
 2. **Services (`glyphx/app/services/`)**
@@ -29,7 +29,7 @@ All blocking operations (subprocesses, HTTP requests, heavy file I/O) run on the
 
 ## Tool Loop
 
-Both Chat and Agent panels rely on `_run_tool_loop`, which:
+The AIPanel (both chat and agent modes) relies on `_run_tool_loop`, which:
 1. Calls the LLM with the current conversation + tool schemas.
 2. Executes tool calls through `ToolsBridge`, logging command history where relevant.
 3. Streams tool results and assistant replies back into the transcript.

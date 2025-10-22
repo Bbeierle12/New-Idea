@@ -17,8 +17,35 @@
 
 ## First Run
 
-1. Open Config > Settings and provide your API key, model name, base URL, and (optionally) a custom agent prompt.
+1. Open Config > Settings (or press Ctrl+,) and configure your LLM provider:
+   - **🤖 LLM Tab**: API key, model name, base URL, timeouts, and agent prompt
+   - **🛡️ Safety Tab**: Tool output limits, truncation settings, and default mode
 2. The console tab will display structured logs as actions occur.
+
+### Configuring Safety Settings
+
+The Settings dialog includes a **🛡️ Safety** tab with the following options:
+
+**Tool Output Max Bytes**:
+- Controls the maximum size of tool outputs
+- Default: 8,000 bytes (8 KB)
+- Range: 1,000 - 100,000 bytes
+- Increase for large file operations
+- Decrease for memory-constrained systems
+
+**Context Truncation Enabled**:
+- When enabled, tool outputs exceeding the limit are automatically truncated
+- Truncation markers clearly indicate when content is shortened
+- Keep enabled unless you have a specific need for full outputs
+
+**Default Mode**:
+- Sets the mode GlyphX starts in
+- `chat`: Safe Mode (tools disabled) - recommended
+- `agent`: Agent Mode (tools enabled)
+
+**Reset to Defaults**:
+- Click this button to restore safe default values
+- Useful if you're experiencing issues or unsure about your configuration
 
 ## Managing Glyphs
 
@@ -43,6 +70,35 @@
 - read_file
 - write_file
 - list_files
+
+### Safety Modes
+
+GlyphX includes two safety modes to protect your system:
+
+**🛡️ Chat Mode (Safe Mode)**:
+- Tools are disabled
+- Safe for general conversations
+- Recommended for most interactions
+- No file system or command access
+
+**⚡ Agent Mode**:
+- Tools are enabled with validation
+- Commands are validated before execution
+- File operations restricted to workspace
+- Output size limits prevent memory issues
+- User confirmation required for dangerous operations
+
+**Mode Indicator**:
+- Look for the colored badge in the top area (e.g., "🛡️ Safe Mode" in green or "⚡ Agent Mode" in yellow)
+- Click the indicator for detailed information about the current mode
+- Hover over it for a quick tooltip
+
+**Switching Modes**:
+1. Use the mode selector dropdown in the top-right area
+2. Choose "🛡️ Safe Chat" or "⚡ Agent Mode"
+3. The mode indicator updates immediately
+
+**Best Practice**: Start in Chat Mode and switch to Agent Mode only when you need tool execution.
 
 ## Running Agent Tasks
 
@@ -77,4 +133,6 @@
 
 - [Architecture Overview](ARCHITECTURE.md)
 - [Contributing Guide](CONTRIBUTING.md)
+- [Safety Guide](SAFETY_GUIDE.md) - Comprehensive guide to safety features and best practices
+- [Quick Reference](../QUICK_REFERENCE.md) - Feature summaries and tips
 - [Primary README](../README.md)

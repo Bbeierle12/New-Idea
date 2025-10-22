@@ -58,10 +58,9 @@ class SidebarPanel(ttk.Frame):
         sections = [
             ("📁 File", "file"),
             ("🏷️ Glyphs", "glyphs"),
-            ("💬 Chat", "chat"),
-            ("🤖 Agent", "agent"),
-            ("� Terminal", "terminal"),
-            ("�📊 Console", "console"),
+            ("💬 AI Chat", "chat"),
+            ("💻 Terminal", "terminal"),
+            ("📊 Console", "console"),
             ("⚙️ Settings", "settings"),
             ("📦 Data Archive", "archive"),
         ]
@@ -119,6 +118,7 @@ class TerminalPanel(ttk.Frame):
         logger: Logger,
         command_history: CommandHistory,
         session_summarizer=None,
+        llm_client=None,
     ) -> None:
         super().__init__(master, padding=8)
         self.columnconfigure(0, weight=1)
@@ -128,7 +128,9 @@ class TerminalPanel(ttk.Frame):
         self._logger = logger
         self._command_history = command_history
         self._session_summarizer = session_summarizer
+        self._llm_client = llm_client
         self._is_running = False
+        self._ai_mode = tk.BooleanVar(value=False)
         self._cwd_var = tk.StringVar(value=str(Path.cwd()))
 
         # Header with working directory
@@ -145,6 +147,15 @@ class TerminalPanel(ttk.Frame):
         # Add Summarize button if session summarizer is available
         if self._session_summarizer:
             ttk.Button(header, text="📝 Summarize", command=self._summarize_session).grid(row=0, column=4, padx=(8, 0))
+        
+        # Add AI toggle if LLM client is available
+        if self._llm_client:
+            ttk.Checkbutton(
+                header, 
+                text="🤖 AI Assistant", 
+                variable=self._ai_mode,
+                command=self._toggle_ai_mode
+            ).grid(row=0, column=5, padx=(8, 0))
 
         # Output display
         output_frame = ttk.Frame(self)
@@ -174,6 +185,7 @@ class TerminalPanel(ttk.Frame):
         self._output.tag_config("stderr", foreground="#f48771")
         self._output.tag_config("error", foreground="#f48771", font=("Consolas", 10, "bold"))
         self._output.tag_config("success", foreground="#4ec9b0")
+        self._output.tag_config("ai", foreground="#c586c0", font=("Consolas", 10, "italic"))
 
         # Command input
         input_frame = ttk.Frame(self)
@@ -256,12 +268,17 @@ class TerminalPanel(ttk.Frame):
             self._input.delete(0, "end")
 
     def _on_execute(self, *_args: object) -> None:
-        """Execute the command."""
+        """Execute the command or AI query."""
         if self._is_running:
             return
         
         command = self._input.get().strip()
         if not command:
+            return
+
+        # AI Mode: Send to LLM for interpretation
+        if self._ai_mode.get() and self._llm_client:
+            self._execute_ai_command(command)
             return
 
         # Handle built-in commands
@@ -343,6 +360,77 @@ class TerminalPanel(ttk.Frame):
             self.after(0, display)
 
         self._worker.submit(job, description="terminal_command", callback=callback)
+    
+    def _toggle_ai_mode(self) -> None:
+        """Toggle AI assistant mode."""
+        if self._ai_mode.get():
+            self._append_text("\n[🤖 AI Assistant enabled - ask me anything!]\n", "success")
+            self._input.delete(0, "end")
+            self._input.insert(0, "")
+        else:
+            self._append_text("\n[Terminal mode - direct command execution]\n", "stdout")
+    
+    def _execute_ai_command(self, query: str) -> None:
+        """Execute an AI-assisted command."""
+        self._append_text(f"🤖 {query}\n", "command")
+        self._input.delete(0, "end")
+        self._set_running(True)
+        
+        # Get recent terminal context
+        recent_commands = self._command_history.tail(5)
+        context_lines = [f"  {r.command}" for r in recent_commands if r.source == "terminal"]
+        context = "\n".join(context_lines) if context_lines else "  (no recent commands)"
+        
+        # Build AI prompt
+        system_prompt = f"""You are a terminal assistant helping the user with shell commands.
+
+Current working directory: {self._cwd_var.get()}
+Recent commands:
+{context}
+
+When the user asks a question:
+1. If they want to run a command, respond with ONLY the command to execute (no explanation)
+2. If they ask for help/explanation, provide a brief, helpful response
+3. If they ask "run X" or "execute Y", provide the appropriate command
+
+Be concise and practical. Assume the user is on Windows using PowerShell."""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query}
+        ]
+        
+        def job():
+            try:
+                response = self._llm_client.chat(messages, stream=False)
+                return response.get("content", "")
+            except Exception as exc:
+                return f"AI Error: {exc}"
+        
+        def callback(result):
+            def display():
+                self._set_running(False)
+                
+                if result.startswith("AI Error:"):
+                    self._append_text(f"{result}\n", "error")
+                else:
+                    # Check if response looks like a command (short, no explanation)
+                    lines = result.strip().split('\n')
+                    if len(lines) == 1 and len(result) < 100 and not any(word in result.lower() for word in ['here', 'you can', 'this will', 'command']):
+                        # Looks like a command - ask if user wants to run it
+                        self._append_text(f"💡 Suggested command: {result}\n", "success")
+                        self._append_text("Press Enter to run it, or edit first.\n", "stdout")
+                        self._input.insert(0, result.strip())
+                    else:
+                        # Looks like an explanation
+                        self._append_text(f"{result}\n", "stdout")
+                
+                self._append_prompt()
+                self._input.focus_set()
+            
+            self.after(0, display)
+        
+        self._worker.submit(job, description="ai_terminal_query", callback=callback)
     
     def _summarize_session(self) -> None:
         """Summarize recent terminal commands using Gemma."""
@@ -787,8 +875,134 @@ class GlyphDialog(tk.Toplevel):
     def _on_cancel(self) -> None:
         self._result = None
         self.destroy()
-class ChatPanel(ttk.Frame):
-    """Chat REPL with tool-calling support."""
+
+
+class ToolConfirmationDialog(tk.Toplevel):
+    """Confirmation dialog for tool operations."""
+    
+    def __init__(self, master: tk.Misc, tool_name: str, arguments: dict, mode: str = "chat") -> None:
+        super().__init__(master)
+        self.title("Tool Execution Confirmation")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+        
+        self.result = None
+        
+        # Main frame
+        frame = ttk.Frame(self, padding=16)
+        frame.grid(row=0, column=0, sticky="nsew")
+        
+        # Warning icon and title
+        title_frame = ttk.Frame(frame)
+        title_frame.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        
+        ttk.Label(
+            title_frame, 
+            text="⚠️", 
+            font=("Segoe UI", 24)
+        ).grid(row=0, column=0, padx=(0, 12))
+        
+        ttk.Label(
+            title_frame,
+            text=f"Confirm {tool_name.replace('_', ' ').title()} Execution",
+            font=("Segoe UI", 12, "bold")
+        ).grid(row=0, column=1)
+        
+        # Mode indicator
+        mode_text = "AI Agent" if mode == "agent" else "AI Chat"
+        ttk.Label(
+            frame,
+            text=f"The {mode_text} wants to execute the following operation:",
+            font=("Segoe UI", 10)
+        ).grid(row=1, column=0, sticky="w", pady=(0, 8))
+        
+        # Tool details
+        details_frame = ttk.LabelFrame(frame, text="Operation Details", padding=12)
+        details_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        details_frame.columnconfigure(1, weight=1)
+        
+        # Format arguments
+        row = 0
+        for key, value in arguments.items():
+            ttk.Label(details_frame, text=f"{key}:", font=("Segoe UI", 9, "bold")).grid(
+                row=row, column=0, sticky="nw", padx=(0, 8), pady=2
+            )
+            
+            # Truncate long values
+            display_value = str(value)
+            if len(display_value) > 200:
+                display_value = display_value[:197] + "..."
+            
+            value_label = ttk.Label(details_frame, text=display_value, wraplength=400)
+            value_label.grid(row=row, column=1, sticky="w", pady=2)
+            row += 1
+        
+        # Safety notice
+        safety_frame = ttk.Frame(frame)
+        safety_frame.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        
+        ttk.Label(
+            safety_frame,
+            text="ℹ️ This operation may modify your system or files.",
+            foreground="blue",
+            font=("Segoe UI", 9)
+        ).grid(row=0, column=0, sticky="w")
+        
+        # Remember choice checkbox
+        self.remember_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame,
+            text="Don't ask again for this session",
+            variable=self.remember_var
+        ).grid(row=4, column=0, sticky="w", pady=(0, 12))
+        
+        # Buttons
+        button_frame = ttk.Frame(frame)
+        button_frame.grid(row=5, column=0, sticky="e")
+        
+        ttk.Button(
+            button_frame,
+            text="Allow",
+            command=self._on_allow
+        ).grid(row=0, column=0, padx=(0, 8))
+        
+        ttk.Button(
+            button_frame,
+            text="Deny",
+            command=self._on_deny
+        ).grid(row=0, column=1, padx=(0, 8))
+        
+        ttk.Button(
+            button_frame,
+            text="Always Deny",
+            command=self._on_always_deny
+        ).grid(row=0, column=2)
+        
+        # Keyboard shortcuts
+        self.bind("<Return>", lambda e: self._on_allow())
+        self.bind("<Escape>", lambda e: self._on_deny())
+        
+    def _on_allow(self) -> None:
+        self.result = ("allow", self.remember_var.get())
+        self.destroy()
+    
+    def _on_deny(self) -> None:
+        self.result = ("deny", self.remember_var.get())
+        self.destroy()
+    
+    def _on_always_deny(self) -> None:
+        self.result = ("always_deny", True)
+        self.destroy()
+    
+    def show(self) -> tuple[str, bool]:
+        """Show dialog and return (action, remember) tuple."""
+        self.wait_window(self)
+        return self.result or ("deny", False)
+
+
+class AIPanel(ttk.Frame):
+    """Unified AI Chat and Agent panel with mode toggle."""
 
     TRANSCRIPT_CHAR_LIMIT = 1200
 
@@ -803,10 +1017,11 @@ class ChatPanel(ttk.Frame):
         logger: Logger,
         *,
         max_steps: int = 6,
+        settings_service: Optional['SettingsService'] = None,
     ) -> None:
         super().__init__(master, padding=8)
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
         self._worker = worker
         self._llm = llm_client
         self._tools = tools
@@ -817,9 +1032,38 @@ class ChatPanel(ttk.Frame):
         self._messages: list[ChatMessage] = []
         self._pending = False
         self._max_steps = max_steps
+        self._mode = tk.StringVar(value="chat")
+        self._cancel_flag = False
+        self._current_job = None
+        self._settings_service = settings_service
 
+        # Mode selector at top
+        mode_frame = ttk.Frame(self)
+        mode_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ttk.Radiobutton(mode_frame, text="💬 Chat", variable=self._mode, value="chat", command=self._on_mode_change).pack(side="left", padx=4)
+        ttk.Radiobutton(mode_frame, text="🤖 Agent", variable=self._mode, value="agent", command=self._on_mode_change).pack(side="left", padx=4)
+        
+        # Mode indicator label with color coding and interactivity
+        self._mode_indicator = tk.Label(
+            mode_frame, 
+            text="", 
+            font=("Segoe UI", 9, "bold"),
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=2,
+            cursor="hand2"
+        )
+        self._mode_indicator.pack(side="left", padx=(12, 0))
+        self._mode_indicator.bind("<Button-1>", self._on_mode_indicator_click)
+        self._mode_indicator.bind("<Enter>", self._on_mode_indicator_hover)
+        self._mode_indicator.bind("<Leave>", self._on_mode_indicator_leave)
+        self._mode_indicator_tooltip_window = None
+        self._update_mode_indicator()
+        
+        # Transcript/log (shared between both modes)
         transcript_frame = ttk.Frame(self)
-        transcript_frame.grid(row=0, column=0, sticky="nsew")
+        transcript_frame.grid(row=1, column=0, sticky="nsew")
         transcript_frame.columnconfigure(0, weight=1)
         transcript_frame.rowconfigure(0, weight=1)
 
@@ -834,20 +1078,140 @@ class ChatPanel(ttk.Frame):
         self._transcript.grid(row=0, column=0, sticky="nsew")
         transcript_scroll.grid(row=0, column=1, sticky="ns")
 
+        # Input frame (switches between chat and agent modes)
         input_frame = ttk.Frame(self)
-        input_frame.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        input_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         input_frame.columnconfigure(0, weight=1)
 
         self._input = tk.Text(input_frame, height=4, wrap="word")
         self._input.grid(row=0, column=0, sticky="ew")
-        self._input.bind("<Control-Return>", self._on_send)
+        self._input.bind("<Control-Return>", self._on_send_or_run)
 
         buttons = ttk.Frame(input_frame)
         buttons.grid(row=0, column=1, padx=(8, 0), sticky="ns")
-        self._send_button = ttk.Button(buttons, text="Send", command=self._on_send)
-        clear_button = ttk.Button(buttons, text="Clear", command=self._clear_chat)
-        self._send_button.grid(row=0, column=0, sticky="ew")
-        clear_button.grid(row=1, column=0, pady=(4, 0), sticky="ew")
+        self._action_button = ttk.Button(buttons, text="Send", command=self._on_send_or_run)
+        self._stop_button = ttk.Button(buttons, text="Stop", command=self._stop_operation, state="disabled")
+        clear_button = ttk.Button(buttons, text="Clear", command=self._clear_transcript)
+        self._action_button.grid(row=0, column=0, sticky="ew")
+        self._stop_button.grid(row=1, column=0, pady=(4, 0), sticky="ew")
+        clear_button.grid(row=2, column=0, pady=(4, 0), sticky="ew")
+        
+    def _on_mode_change(self) -> None:
+        """Update UI when mode changes."""
+        mode = self._mode.get()
+        # Both modes now use the same interface
+        self._action_button.configure(text="Send")
+        self._update_mode_indicator()
+    
+    def _update_mode_indicator(self) -> None:
+        """Update the mode indicator label with color coding."""
+        mode = self._mode.get()
+        if mode == "chat":
+            self._mode_indicator.configure(
+                text="🛡️ Safe Mode",
+                background="#d4edda",  # Light green
+                foreground="#155724"   # Dark green
+            )
+            # Create tooltip text
+            tooltip_text = (
+                "Chat Mode (Safe)\n"
+                "• Requires confirmation for dangerous commands\n"
+                "• File operations restricted\n"
+                "• Output limits enforced\n"
+                "• Click for more info"
+            )
+        else:
+            self._mode_indicator.configure(
+                text="⚡ Agent Mode",
+                background="#fff3cd",  # Light yellow
+                foreground="#856404"   # Dark yellow/brown
+            )
+            tooltip_text = (
+                "Agent Mode (Autonomous)\n"
+                "• Tools execute without confirmation\n"
+                "• Use with caution\n"
+                "• Monitor tool execution carefully\n"
+                "• Click for more info"
+            )
+        
+        # Update tooltip (store for click handler)
+        self._mode_indicator_tooltip = tooltip_text
+
+    def _on_mode_indicator_click(self, event: tk.Event) -> None:
+        """Show detailed mode information when indicator is clicked."""
+        mode = self._mode.get()
+        
+        if mode == "chat":
+            title = "Chat Mode - Safe Operation"
+            message = (
+                "You are in CHAT MODE (Safe)\n\n"
+                "Safety Features Active:\n"
+                "• Dangerous shell commands require confirmation\n"
+                "• File write operations are restricted\n"
+                "• Tool output is truncated to prevent token bloat\n"
+                "• Session-based approval caching reduces dialogs\n\n"
+                "Best for:\n"
+                "• Interactive conversations\n"
+                "• Exploring new tools\n"
+                "• Learning what the assistant can do\n"
+                "• When you want control over tool execution\n\n"
+                "Switch to Agent Mode for autonomous operation."
+            )
+        else:
+            title = "Agent Mode - Autonomous Operation"
+            message = (
+                "You are in AGENT MODE (Autonomous)\n\n"
+                "⚠️ Warning: Reduced Safety Checks\n"
+                "• Tools execute WITHOUT confirmation dialogs\n"
+                "• Commands run with minimal intervention\n"
+                "• You are responsible for monitoring execution\n\n"
+                "Safety features still active:\n"
+                "• Output truncation (configurable in settings)\n"
+                "• Basic validation of file operations\n"
+                "• Timeout limits enforced\n\n"
+                "Best for:\n"
+                "• Autonomous task execution\n"
+                "• Batch operations\n"
+                "• When you trust the assistant's judgment\n\n"
+                "⚠️ Use with caution! Switch to Chat Mode for safer operation."
+            )
+        
+        # Show modal dialog with mode information
+        from tkinter import messagebox
+        messagebox.showinfo(title, message)
+
+    def _on_mode_indicator_hover(self, event: tk.Event) -> None:
+        """Show tooltip when hovering over mode indicator."""
+        if hasattr(self, '_mode_indicator_tooltip'):
+            # Create tooltip window
+            self._mode_indicator_tooltip_window = tk.Toplevel(self._mode_indicator)
+            self._mode_indicator_tooltip_window.wm_overrideredirect(True)
+            
+            # Position tooltip near the cursor
+            x = event.x_root + 10
+            y = event.y_root + 10
+            self._mode_indicator_tooltip_window.wm_geometry(f"+{x}+{y}")
+            
+            # Create tooltip label
+            label = tk.Label(
+                self._mode_indicator_tooltip_window,
+                text=self._mode_indicator_tooltip,
+                justify="left",
+                background="#ffffe0",
+                foreground="black",
+                relief="solid",
+                borderwidth=1,
+                font=("Segoe UI", 9),
+                padx=8,
+                pady=4
+            )
+            label.pack()
+
+    def _on_mode_indicator_leave(self, event: tk.Event) -> None:
+        """Hide tooltip when leaving mode indicator."""
+        if self._mode_indicator_tooltip_window:
+            self._mode_indicator_tooltip_window.destroy()
+            self._mode_indicator_tooltip_window = None
 
     # ------------------------------------------------------------------
     def _append_transcript(self, message: ChatMessage) -> None:
@@ -906,8 +1270,22 @@ class ChatPanel(ttk.Frame):
 
     def _set_pending(self, pending: bool) -> None:
         self._pending = pending
-        state = tk.DISABLED if pending else tk.NORMAL
-        self._send_button.configure(state=state)
+        if pending:
+            self._action_button.configure(state=tk.DISABLED)
+            self._stop_button.configure(state=tk.NORMAL)
+            self._cancel_flag = False
+        else:
+            self._action_button.configure(state=tk.NORMAL)
+            self._stop_button.configure(state=tk.DISABLED)
+            self._current_job = None
+    
+    def _stop_operation(self) -> None:
+        """Cancel the current operation."""
+        self._cancel_flag = True
+        self._append_info("🛑 Stopping operation...")
+        if self._current_job:
+            # Note: Worker doesn't support cancellation yet, this is a flag for the loop
+            pass
 
     def _write_history(self, message: ChatMessage) -> None:
         meta: dict[str, str] = {}
@@ -915,26 +1293,35 @@ class ChatPanel(ttk.Frame):
             meta["name"] = message.name
         if message.tool_call_id:
             meta["tool_call_id"] = message.tool_call_id
-        self._history.append(message.role, message.content or "", **meta)
+        mode = self._mode.get()
+        self._history.append(message.role, message.content or "", mode=mode, **meta)
 
-    def _clear_chat(self) -> None:
+    def _clear_transcript(self) -> None:
+        """Clear the transcript/log."""
+        if self._pending:
+            return
         self._messages.clear()
         self._transcript.configure(state="normal")
         self._transcript.delete("1.0", "end")
         self._transcript.configure(state="disabled")
-
-    def _on_send(self, *_args: object) -> None:
+    
+    def _on_send_or_run(self, *_args: object) -> None:
+        """Send message in either chat or agent mode (both conversational now)."""
         if self._pending:
             return
         content = self._input.get("1.0", "end").strip()
         if not content:
             return
         self._input.delete("1.0", "end")
+        
+        mode = self._mode.get()
+        
+        # Add user message to conversation
         user_msg = ChatMessage(role="user", content=content)
         self._messages.append(user_msg)
         self._append_transcript(user_msg)
         self._write_history(user_msg)
-        self._logger.info("chat_send", length=str(len(content)))
+        self._logger.info(f"{mode}_send", length=str(len(content)))
         self._set_pending(True)
         baseline = len(self._messages)
         tools_schema = self._tools.tool_descriptions()
@@ -946,15 +1333,28 @@ class ChatPanel(ttk.Frame):
         self._streaming_buffer = ""
 
         def job() -> dict[str, object]:
-            conversation = [ChatMessage.from_dict(m.to_dict()) for m in self._messages]
+            # Build conversation with system prompt for agent mode
+            conversation = []
+            if mode == "agent" and self._messages:
+                # Inject agent system prompt at the beginning
+                conversation.append(ChatMessage(role="system", content=self._agent_prompt))
+                # Add all messages except the system prompt
+                conversation.extend([
+                    ChatMessage.from_dict(m.to_dict()) 
+                    for m in self._messages 
+                    if m.role != "system"
+                ])
+            else:
+                conversation = [ChatMessage.from_dict(m.to_dict()) for m in self._messages]
+            
             try:
-                loop_result = self._chat_loop_streaming(conversation, tools_schema)
+                loop_result = self._chat_loop_streaming(conversation, tools_schema, mode)
                 loop_result["conversation"] = [m.to_dict() for m in conversation]
                 loop_result["ok"] = True
                 return loop_result
             except Exception as exc:  # noqa: BLE001
                 self._logger.error(
-                    "chat_error",
+                    f"{mode}_error",
                     error=f"{type(exc).__name__}: {exc}",
                 )
                 return {
@@ -978,8 +1378,15 @@ class ChatPanel(ttk.Frame):
                         for payload in conversation_payload
                         if isinstance(payload, dict)
                     ]
-                    new_messages = conversation[baseline:]
-                    self._messages = conversation
+                    # Extract only the new messages (skip system prompt if present)
+                    new_messages = []
+                    for msg in conversation[baseline:]:
+                        if msg.role != "system":
+                            new_messages.append(msg)
+                    
+                    # Update main message list
+                    self._messages.extend(new_messages)
+                    
                     for idx, msg in enumerate(new_messages):
                         self._write_history(msg)
                         # Skip displaying assistant message since we already streamed it
@@ -998,14 +1405,14 @@ class ChatPanel(ttk.Frame):
                         )
                 if not result.get("ok"):
                     messagebox.showerror(
-                        "Chat Error",
-                        f"Failed to complete chat: {result.get('error')}",
+                        f"{mode.title()} Error",
+                        f"Failed to complete {mode}: {result.get('error')}",
                         parent=self.winfo_toplevel(),
                     )
 
             self.after(0, apply)
 
-        self._worker.submit(job, description="chat_send", callback=callback)
+        self._worker.submit(job, description=f"{mode}_send", callback=callback)
 
     def _append_streaming_token(self, token: str) -> None:
         """Append a token to the transcript in real-time (called from worker thread)."""
@@ -1020,8 +1427,17 @@ class ChatPanel(ttk.Frame):
         self,
         conversation: list[ChatMessage],
         tools_schema: list[dict[str, object]],
+        mode: str = "chat",
     ) -> dict[str, object]:
-        """Chat loop with streaming support."""
+        """Chat/agent loop with streaming support."""
+        # Get truncation settings
+        truncation_enabled = True
+        truncation_max_bytes = 8000
+        if self._settings_service:
+            settings = self._settings_service.get()
+            truncation_enabled = settings.context_truncation_enabled
+            truncation_max_bytes = settings.tool_output_max_bytes
+        
         return _run_tool_loop_streaming(
             self._llm,
             self._tools,
@@ -1030,8 +1446,10 @@ class ChatPanel(ttk.Frame):
             tools_schema,
             self._max_steps,
             command_history=self._command_history,
-            history_source="chat",
+            history_source=mode,
             on_token=self._append_streaming_token,
+            truncation_max_bytes=truncation_max_bytes,
+            truncation_enabled=truncation_enabled,
         )
 
     # ------------------------------------------------------------------
@@ -1040,6 +1458,14 @@ class ChatPanel(ttk.Frame):
         conversation: list[ChatMessage],
         tools_schema: list[dict[str, object]],
     ) -> dict[str, object]:
+        # Get truncation settings
+        truncation_enabled = True
+        truncation_max_bytes = 8000
+        if self._settings_service:
+            settings = self._settings_service.get()
+            truncation_enabled = settings.context_truncation_enabled
+            truncation_max_bytes = settings.tool_output_max_bytes
+        
         return _run_tool_loop(
             self._llm,
             self._tools,
@@ -1049,9 +1475,17 @@ class ChatPanel(ttk.Frame):
             self._max_steps,
             command_history=self._command_history,
             history_source="chat",
+            truncation_max_bytes=truncation_max_bytes,
+            truncation_enabled=truncation_enabled,
         )
 
+    def set_prompt(self, prompt: Optional[str]) -> None:
+        """Set the agent system prompt."""
+        self._agent_prompt = prompt or DEFAULT_AGENT_PROMPT
 
+
+# Keep ChatPanel as an alias for backward compatibility
+ChatPanel = AIPanel
 
 
 def _run_tool_loop_streaming(
@@ -1065,8 +1499,13 @@ def _run_tool_loop_streaming(
     command_history: CommandHistory | None = None,
     history_source: str = "",
     on_token: Optional[callable] = None,
+    truncation_max_bytes: int = 8000,
+    truncation_enabled: bool = True,
 ) -> dict[str, object]:
     """Tool loop with streaming support for assistant responses."""
+    # Set the mode on tools bridge for proper safety handling
+    tools.set_mode(history_source or "chat")
+    
     for step in range(1, max_steps + 1):
         logger.info("chat_step", step=str(step), messages=str(len(conversation)))
         
@@ -1102,6 +1541,9 @@ def _run_tool_loop_streaming(
                 try:
                     result = tools.execute_tool(name, arguments)
                     content = json.dumps(result, ensure_ascii=False)
+                    # Truncate tool results to prevent token bloat
+                    if truncation_enabled:
+                        content = _truncate_tool_result(content, truncation_max_bytes)
                 except Exception as exc:  # noqa: BLE001
                     content = json.dumps({"error": str(exc)}, ensure_ascii=False)
                     logger.error(
@@ -1149,7 +1591,12 @@ def _run_tool_loop(
     *,
     command_history: CommandHistory | None = None,
     history_source: str = "",
+    truncation_max_bytes: int = 8000,
+    truncation_enabled: bool = True,
 ) -> dict[str, object]:
+    # Set the mode on tools bridge for proper safety handling
+    tools.set_mode(history_source or "chat")
+    
     for step in range(1, max_steps + 1):
         logger.info("chat_step", step=str(step), messages=str(len(conversation)))
         response = llm_client.chat(conversation, tools=tools_schema)
@@ -1175,6 +1622,9 @@ def _run_tool_loop(
                 try:
                     result = tools.execute_tool(name, arguments)
                     content = json.dumps(result, ensure_ascii=False)
+                    # Truncate tool results to prevent token bloat
+                    if truncation_enabled:
+                        content = _truncate_tool_result(content, truncation_max_bytes)
                 except Exception as exc:  # noqa: BLE001
                     content = json.dumps({"error": str(exc)}, ensure_ascii=False)
                     logger.error(
@@ -1212,170 +1662,6 @@ def _run_tool_loop(
     raise RuntimeError("Model exceeded tool-call step limit")
 
 
-class AgentPanel(ttk.Frame):
-    """One-shot agent runner that loops through tool calls."""
-
-    TRANSCRIPT_CHAR_LIMIT = 1200
-
-    def __init__(
-        self,
-        master: tk.Misc,
-        worker: Worker,
-        llm_client: LLMClient,
-        tools: ToolsBridge,
-        command_history: CommandHistory,
-        logger: Logger,
-        *,
-        max_steps: int = 6,
-    ) -> None:
-        super().__init__(master, padding=8)
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
-        self._worker = worker
-        self._llm = llm_client
-        self._tools = tools
-        self._command_history = command_history
-        self._logger = logger
-        self._max_steps = max_steps
-        self._running = False
-        self._goal_var = tk.StringVar()
-
-        controls = ttk.Frame(self)
-        controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        controls.columnconfigure(0, weight=1)
-
-        self._goal_entry = ttk.Entry(controls, textvariable=self._goal_var)
-        self._goal_entry.grid(row=0, column=0, sticky="ew")
-        self._goal_entry.bind("<Return>", self._on_run)
-
-        self._run_button = ttk.Button(controls, text="Run", command=self._on_run)
-        self._run_button.grid(row=0, column=1, padx=(8, 0))
-
-        clear_button = ttk.Button(controls, text="Clear", command=self._clear_log)
-        clear_button.grid(row=0, column=2, padx=(4, 0))
-
-        self._log = tk.Text(self, wrap="word", state="disabled", height=20)
-        self._log.grid(row=1, column=0, sticky="nsew")
-
-    # ------------------------------------------------------------------
-    def _on_run(self, *_args: object) -> None:
-        if self._running:
-            return
-        goal = self._goal_var.get().strip()
-        if not goal:
-            messagebox.showinfo("Agent", "Enter a goal to run.", parent=self.winfo_toplevel())
-            return
-        self._set_running(True)
-        if self._log.index("end-1c") != "1.0":
-            self._append_text("\n")
-        self._append_line("Goal", goal)
-        self._append_line("Status", "Working…")
-        tools_schema = self._tools.tool_descriptions()
-        base_conversation = [
-            ChatMessage(role="system", content=self._agent_prompt),
-            ChatMessage(role="user", content=goal),
-        ]
-
-        def job() -> dict[str, object]:
-            conversation = [ChatMessage.from_dict(msg.to_dict()) for msg in base_conversation]
-            try:
-                result = _run_tool_loop(
-                    self._llm,
-                    self._tools,
-                    self._logger,
-                    conversation,
-                    tools_schema,
-                    self._max_steps,
-                    command_history=self._command_history,
-                    history_source="agent",
-                )
-                return {
-                    "ok": True,
-                    "conversation": [msg.to_dict() for msg in conversation],
-                    "reply": result.get("reply"),
-                    "usage": result.get("usage"),
-                }
-            except Exception as exc:  # noqa: BLE001
-                self._logger.error(
-                    "agent_error",
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-                return {
-                    "ok": False,
-                    "error": exc,
-                    "conversation": [msg.to_dict() for msg in conversation],
-                }
-
-        def callback(result: dict[str, object]) -> None:
-            def apply() -> None:
-                self._set_running(False)
-                conversation_payload = result.get("conversation")
-                if isinstance(conversation_payload, list):
-                    self._render_conversation(conversation_payload)
-                if result.get("ok"):
-                    self._append_line("Status", "Completed")
-                else:
-                    error_text = str(result.get("error"))
-                    self._append_line("Status", f"Failed: {error_text}")
-                    messagebox.showerror(
-                        "Agent Error",
-                        f"Agent run failed: {error_text}",
-                        parent=self.winfo_toplevel(),
-                    )
-                self._goal_entry.focus_set()
-
-            self.after(0, apply)
-
-        self._worker.submit(job, description="agent_run", callback=callback)
-
-    def set_prompt(self, prompt: Optional[str]) -> None:
-        self._agent_prompt = prompt or DEFAULT_AGENT_PROMPT
-
-    def _render_conversation(self, payloads: list[dict[str, object]]) -> None:
-        for payload in payloads:
-            if not isinstance(payload, dict):
-                continue
-            message = ChatMessage.from_dict(payload)
-            if message.role == "system":
-                continue
-            if message.role == "user":
-                continue
-            if message.role == "tool":
-                prefix = f"[tool:{message.name}]" if message.name else "[tool]"
-            else:
-                prefix = "Assistant"
-            self._append_line(prefix, message.content or "")
-
-    def _append_line(self, prefix: str, content: str) -> None:
-        display = self._truncate(content, self.TRANSCRIPT_CHAR_LIMIT)
-        line = f"{prefix}: {display}\n" if prefix else f"{display}\n"
-        self._append_text(line)
-
-    def _append_text(self, text: str) -> None:
-        self._log.configure(state="normal")
-        self._log.insert("end", text)
-        self._log.configure(state="disabled")
-        self._log.see("end")
-
-    @staticmethod
-    def _truncate(text: str, limit: int) -> str:
-        if len(text) <= limit:
-            return text
-        return text[:limit] + "… (truncated)"
-
-    def _set_running(self, running: bool) -> None:
-        self._running = running
-        state = tk.DISABLED if running else tk.NORMAL
-        self._run_button.configure(state=state)
-        self._goal_entry.configure(state=state)
-
-    def _clear_log(self) -> None:
-        if self._running:
-            return
-        self._log.configure(state="normal")
-        self._log.delete("1.0", "end")
-        self._log.configure(state="disabled")
-
 def _extract_first_choice(payload: dict[str, object]) -> dict[str, object] | None:
     choices = payload.get("choices") if isinstance(payload, dict) else None
     if isinstance(choices, list) and choices:
@@ -1383,6 +1669,46 @@ def _extract_first_choice(payload: dict[str, object]) -> dict[str, object] | Non
         if isinstance(first, dict):
             return first
     return None
+
+
+def _truncate_tool_result(content: str, max_bytes: int = 8000) -> str:
+    """Truncate tool result content to prevent token bloat in conversation.
+    
+    Args:
+        content: The tool result JSON string
+        max_bytes: Maximum size in bytes (default 8KB, ~2000 tokens)
+    
+    Returns:
+        Truncated content if necessary, with truncation marker
+    """
+    content_bytes = content.encode('utf-8', errors='ignore')
+    if len(content_bytes) <= max_bytes:
+        return content
+    
+    # Try to parse JSON and truncate intelligently
+    try:
+        data = json.loads(content)
+        # If it has stdout/stderr/content/data fields, truncate those
+        if isinstance(data, dict):
+            truncated = False
+            for key in ['stdout', 'stderr', 'content', 'data', 'output']:
+                if key in data and isinstance(data[key], str):
+                    original_len = len(data[key])
+                    # Truncate if this field is large
+                    if original_len > 1000:  # Truncate any field over 1KB
+                        data[key] = data[key][:max_bytes // 2] + f"\n\n[... truncated {original_len - max_bytes // 2} chars for token efficiency]"
+                        truncated = True
+            
+            # Re-encode and check total size
+            result = json.dumps(data, ensure_ascii=False)
+            if len(result.encode('utf-8')) <= max_bytes or truncated:
+                return result
+    except (json.JSONDecodeError, Exception):
+        pass
+    
+    # Fallback: simple byte truncation
+    truncated = content_bytes[:max_bytes].decode('utf-8', errors='ignore')
+    return truncated + "\n\n[... truncated for token efficiency]"
 
 
 class Application:
@@ -1398,7 +1724,20 @@ class Application:
         self.worker = Worker(self.logger)
         self.registry = RegistryService(self.paths.registry_path, self.logger)
         self.settings = SettingsService(self.paths.settings_path, self.logger)
-        self.tools = ToolsBridge(self.registry, self.logger, default_shell_timeout=self.settings.get().shell_timeout)
+        
+        # Initialize tools with safety configuration
+        from .infra.safety import SafetyConfig
+        self.safety_config = SafetyConfig(
+            enabled=True,
+            require_confirmation=True,
+        )
+        self.tools = ToolsBridge(
+            self.registry, 
+            self.logger, 
+            default_shell_timeout=self.settings.get().shell_timeout,
+            safety_config=self.safety_config,
+            confirmation_callback=self._request_tool_confirmation,
+        )
         self.export_service = ExportService(self.logger)
         self.llm_client = LLMClient(self.settings, self.logger)
         self.chat_history = ChatHistory(self.paths.chat_history_path)
@@ -1489,8 +1828,8 @@ class Application:
         )
         self._panels["glyphs"] = self.glyphs_panel
         
-        # Chat panel
-        self.chat_panel = ChatPanel(
+        # AI Chat panel (unified chat and agent)
+        self.chat_panel = AIPanel(
             self.content_frame,
             self.worker,
             self.llm_client,
@@ -1498,20 +1837,10 @@ class Application:
             self.chat_history,
             self.command_history,
             self.logger,
+            settings_service=self.settings,
         )
+        self.chat_panel.set_prompt(self._current_agent_prompt())
         self._panels["chat"] = self.chat_panel
-        
-        # Agent panel
-        self.agent_panel = AgentPanel(
-            self.content_frame,
-            self.worker,
-            self.llm_client,
-            self.tools,
-            self.command_history,
-            self.logger,
-        )
-        self.agent_panel.set_prompt(self._current_agent_prompt())
-        self._panels["agent"] = self.agent_panel
         
         # Terminal panel
         self.terminal_panel = TerminalPanel(
@@ -1521,6 +1850,7 @@ class Application:
             self.logger,
             self.command_history,
             session_summarizer=self.session_summarizer,
+            llm_client=self.llm_client,
         )
         self._panels["terminal"] = self.terminal_panel
         
@@ -1572,7 +1902,7 @@ class Application:
     def _on_settings_changed(self) -> None:
         current = self.settings.get()
         self.tools.set_shell_timeout(current.shell_timeout)
-        self.agent_panel.set_prompt(self._current_agent_prompt())
+        self.chat_panel.set_prompt(self._current_agent_prompt())
 
     def _build_menu(self) -> None:
         menu = tk.Menu(self.root)
@@ -1614,6 +1944,11 @@ class Application:
             self.worker.shutdown()
         finally:
             self.root.destroy()
+    
+    def _request_tool_confirmation(self, tool_name: str, arguments: dict, mode: str) -> tuple[str, bool]:
+        """Request user confirmation for tool execution (runs on main thread)."""
+        dialog = ToolConfirmationDialog(self.root, tool_name, arguments, mode)
+        return dialog.show()
 
     def _import_glyphs(self) -> None:
         """Import glyphs from JSON file via the main menu."""
@@ -1684,9 +2019,35 @@ class SettingsDialog(tk.Toplevel):
         self._var_gemma_enabled = tk.BooleanVar(value=self._settings.gemma_enabled)
         self._var_gemma_base_url = tk.StringVar(value=self._settings.gemma_base_url)
         self._var_gemma_model = tk.StringVar(value=self._settings.gemma_model)
+        
+        # Safety settings
+        self._var_tool_output_max_bytes = tk.IntVar(value=self._settings.tool_output_max_bytes)
+        self._var_context_truncation_enabled = tk.BooleanVar(value=self._settings.context_truncation_enabled)
+        self._var_default_mode = tk.StringVar(value=self._settings.default_mode)
 
-        frame = ttk.Frame(self, padding=16)
-        frame.grid(row=0, column=0, sticky="nsew")
+        # Create notebook (tabbed interface)
+        notebook = ttk.Notebook(self)
+        notebook.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        
+        # Create tabs
+        self._create_llm_tab(notebook)
+        self._create_safety_tab(notebook)
+        
+        # Bottom buttons
+        btns = ttk.Frame(self, padding=(8, 0, 8, 8))
+        btns.grid(row=1, column=0, sticky="e")
+        btn_save = ttk.Button(btns, text="Save", command=self._on_save)
+        btn_cancel = ttk.Button(btns, text="Cancel", command=self._on_cancel)
+        btn_save.grid(row=0, column=0, padx=(0, 8))
+        btn_cancel.grid(row=0, column=1)
+
+        self.bind("<Return>", lambda _e: self._on_save())
+        self.bind("<Escape>", lambda _e: self._on_cancel())
+        
+    def _create_llm_tab(self, notebook: ttk.Notebook) -> None:
+        """Create the LLM configuration tab."""
+        frame = ttk.Frame(notebook, padding=16)
+        notebook.add(frame, text="🤖 LLM")
         frame.columnconfigure(0, weight=1)
 
         # Preset buttons at the top
@@ -1705,8 +2066,16 @@ class SettingsDialog(tk.Toplevel):
         entry_api.grid(row=2, column=0, sticky="ew", pady=(0, 12))
 
         ttk.Label(frame, text="Model").grid(row=3, column=0, sticky="w")
-        entry_model = ttk.Entry(frame, textvariable=self._var_model)
-        entry_model.grid(row=4, column=0, sticky="ew", pady=(0, 12))
+        
+        # Model selection with combobox and refresh button
+        model_frame = ttk.Frame(frame)
+        model_frame.grid(row=4, column=0, sticky="ew", pady=(0, 12))
+        model_frame.columnconfigure(0, weight=1)
+        
+        self._model_combo = ttk.Combobox(model_frame, textvariable=self._var_model)
+        self._model_combo.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        
+        ttk.Button(model_frame, text="🔄 Refresh", command=self._refresh_models, width=10).grid(row=0, column=1)
 
         ttk.Label(frame, text="Base URL").grid(row=5, column=0, sticky="w")
         entry_url = ttk.Entry(frame, textvariable=self._var_base_url)
@@ -1739,24 +2108,130 @@ class SettingsDialog(tk.Toplevel):
             gemma_frame, 
             text="Enable Gemma for auto-tagging, descriptions, and summaries",
             variable=self._var_gemma_enabled
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
         
         ttk.Label(gemma_frame, text="Gemma Base URL:").grid(row=1, column=0, sticky="w", padx=(20, 8))
-        ttk.Entry(gemma_frame, textvariable=self._var_gemma_base_url).grid(row=1, column=1, sticky="ew", pady=(0, 4))
+        ttk.Entry(gemma_frame, textvariable=self._var_gemma_base_url).grid(row=1, column=1, columnspan=2, sticky="ew", pady=(0, 4))
         
         ttk.Label(gemma_frame, text="Gemma Model:").grid(row=2, column=0, sticky="w", padx=(20, 8))
-        ttk.Entry(gemma_frame, textvariable=self._var_gemma_model).grid(row=2, column=1, sticky="ew")
-
-        btns = ttk.Frame(frame)
-        btns.grid(row=16, column=0, sticky="e")
-        btn_save = ttk.Button(btns, text="Save", command=self._on_save)
-        btn_cancel = ttk.Button(btns, text="Cancel", command=self._on_cancel)
-        btn_save.grid(row=0, column=0, padx=(0, 8))
-        btn_cancel.grid(row=0, column=1)
-
-        self.bind("<Return>", lambda _e: self._on_save())
-        self.bind("<Escape>", lambda _e: self._on_cancel())
-        entry_api.focus_set()
+        self._gemma_model_combo = ttk.Combobox(gemma_frame, textvariable=self._var_gemma_model)
+        self._gemma_model_combo.grid(row=2, column=1, sticky="ew", padx=(0, 4))
+        ttk.Button(gemma_frame, text="🔄", command=self._refresh_gemma_models, width=4).grid(row=2, column=2)
+    
+    def _create_safety_tab(self, notebook: ttk.Notebook) -> None:
+        """Create the Safety configuration tab."""
+        frame = ttk.Frame(notebook, padding=16)
+        notebook.add(frame, text="🛡️ Safety")
+        frame.columnconfigure(0, weight=1)
+        
+        # Info section
+        info_frame = ttk.LabelFrame(frame, text="About Safety Features", padding=8)
+        info_frame.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        
+        info_text = (
+            "GlyphX includes safety features to protect against excessive resource usage:\n\n"
+            "• Chat Mode (🛡️ Safe): Tools are disabled for basic conversations\n"
+            "• Agent Mode (⚡ Agent): Tools are enabled with safety validation\n"
+            "• Context Truncation: Limits tool output to prevent memory issues"
+        )
+        ttk.Label(info_frame, text=info_text, justify="left", wraplength=450).grid(row=0, column=0, sticky="w")
+        
+        # Tool Output Settings
+        output_frame = ttk.LabelFrame(frame, text="Tool Output Settings", padding=8)
+        output_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        output_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(output_frame, text="Max output size (bytes):").grid(row=0, column=0, sticky="w", pady=4)
+        
+        # Spinbox for tool output max bytes
+        output_control_frame = ttk.Frame(output_frame)
+        output_control_frame.grid(row=0, column=1, sticky="ew", pady=4)
+        output_control_frame.columnconfigure(0, weight=1)
+        
+        self._spinbox_output = tk.Spinbox(
+            output_control_frame,
+            from_=1000,
+            to=100000,
+            increment=1000,
+            textvariable=self._var_tool_output_max_bytes,
+            width=15
+        )
+        self._spinbox_output.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        
+        # Display KB value
+        self._label_kb = ttk.Label(output_control_frame, text="")
+        self._label_kb.grid(row=0, column=1, sticky="w")
+        self._update_kb_label()
+        self._var_tool_output_max_bytes.trace_add("write", lambda *_: self._update_kb_label())
+        
+        ttk.Label(output_frame, text="Range: 1,000 - 100,000 bytes (1 KB - 100 KB)", font=("Segoe UI", 8)).grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+        
+        # Context Truncation
+        ttk.Checkbutton(
+            output_frame,
+            text="Enable automatic context truncation",
+            variable=self._var_context_truncation_enabled
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
+        
+        ttk.Label(
+            output_frame,
+            text="When enabled, tool outputs exceeding the limit will be automatically truncated.",
+            font=("Segoe UI", 8),
+            foreground="gray"
+        ).grid(row=3, column=0, columnspan=2, sticky="w")
+        
+        # Default Mode Settings
+        mode_frame = ttk.LabelFrame(frame, text="Default Mode", padding=8)
+        mode_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        
+        ttk.Label(mode_frame, text="Start in mode:").grid(row=0, column=0, sticky="w", pady=4)
+        
+        mode_selector = ttk.Combobox(
+            mode_frame,
+            textvariable=self._var_default_mode,
+            values=["chat", "agent"],
+            state="readonly",
+            width=15
+        )
+        mode_selector.grid(row=0, column=1, sticky="w", padx=(8, 0), pady=4)
+        
+        ttk.Label(
+            mode_frame,
+            text="• chat: Safe mode with tools disabled (recommended)\n• agent: Agent mode with tools enabled",
+            font=("Segoe UI", 8),
+            foreground="gray",
+            justify="left"
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        
+        # Reset to Defaults button
+        reset_frame = ttk.Frame(frame)
+        reset_frame.grid(row=3, column=0, sticky="e")
+        ttk.Button(reset_frame, text="Reset to Defaults", command=self._reset_safety_defaults).grid(row=0, column=0)
+    
+    def _update_kb_label(self) -> None:
+        """Update the KB label when the output size changes."""
+        try:
+            bytes_val = self._var_tool_output_max_bytes.get()
+            kb_val = bytes_val / 1000
+            self._label_kb.config(text=f"({kb_val:.1f} KB)")
+        except:
+            self._label_kb.config(text="")
+    
+    def _reset_safety_defaults(self) -> None:
+        """Reset safety settings to default values."""
+        self._var_tool_output_max_bytes.set(8000)
+        self._var_context_truncation_enabled.set(True)
+        self._var_default_mode.set("chat")
+        messagebox.showinfo(
+            "Reset to Defaults",
+            "Safety settings have been reset to defaults:\n\n"
+            "• Max output: 8,000 bytes (8 KB)\n"
+            "• Truncation: Enabled\n"
+            "• Default mode: chat",
+            parent=self
+        )
 
     def show(self) -> None:
         self.wait_window(self)
@@ -1812,6 +2287,132 @@ class SettingsDialog(tk.Toplevel):
             "Compatible with any OpenAI-compatible API.",
             parent=self
         )
+    
+    def _refresh_models(self) -> None:
+        """Fetch available models from the configured provider."""
+        base_url = self._var_base_url.get().strip()
+        api_key = self._var_api_key.get().strip() or None
+        
+        if not base_url:
+            messagebox.showwarning(
+                "Refresh Models",
+                "Please enter a Base URL first.",
+                parent=self
+            )
+            return
+        
+        # Show loading message
+        self._model_combo.configure(state="disabled")
+        self._model_combo.set("Loading models...")
+        self.update()
+        
+        try:
+            models = self._fetch_models(base_url, api_key)
+            
+            if models:
+                self._model_combo.configure(values=models, state="normal")
+                if self._var_model.get() not in models and models:
+                    self._var_model.set(models[0])
+                messagebox.showinfo(
+                    "Models Loaded",
+                    f"Found {len(models)} available models.",
+                    parent=self
+                )
+            else:
+                self._model_combo.configure(state="normal")
+                messagebox.showwarning(
+                    "No Models",
+                    "No models found. Check your Base URL and API key.",
+                    parent=self
+                )
+        except Exception as exc:
+            self._model_combo.configure(state="normal")
+            self._model_combo.set(self._settings.model)
+            messagebox.showerror(
+                "Refresh Failed",
+                f"Failed to fetch models:\n{exc}\n\n"
+                "Make sure the service is running and accessible.",
+                parent=self
+            )
+    
+    def _fetch_models(self, base_url: str, api_key: str | None) -> list[str]:
+        """Fetch available models from OpenAI-compatible API."""
+        from openai import OpenAI
+        import re
+        
+        # Detect provider type from URL
+        is_ollama = "ollama" in base_url.lower() or "11434" in base_url
+        
+        try:
+            client = OpenAI(base_url=base_url, api_key=api_key or "not-needed")
+            
+            if is_ollama:
+                # Ollama: Use /api/tags endpoint directly
+                import requests
+                ollama_base = re.sub(r'/v1/?$', '', base_url)
+                response = requests.get(f"{ollama_base}/api/tags", timeout=5.0)
+                response.raise_for_status()
+                data = response.json()
+                models = [model['name'] for model in data.get('models', [])]
+            else:
+                # OpenAI-compatible: Use /v1/models endpoint
+                response = client.models.list()
+                models = [model.id for model in response.data]
+            
+            # Sort models alphabetically
+            return sorted(models)
+            
+        except Exception as exc:
+            raise Exception(f"Could not fetch models: {exc}")
+    
+    def _refresh_gemma_models(self) -> None:
+        """Fetch available Ollama models for Gemma."""
+        base_url = self._var_gemma_base_url.get().strip()
+        
+        if not base_url:
+            messagebox.showwarning(
+                "Refresh Models",
+                "Please enter a Gemma Base URL first.",
+                parent=self
+            )
+            return
+        
+        self._gemma_model_combo.configure(state="disabled")
+        self._gemma_model_combo.set("Loading...")
+        self.update()
+        
+        try:
+            models = self._fetch_models(base_url, None)
+            
+            if models:
+                self._gemma_model_combo.configure(values=models, state="normal")
+                if self._var_gemma_model.get() not in models and models:
+                    # Prefer gemma models
+                    gemma_models = [m for m in models if 'gemma' in m.lower()]
+                    self._var_gemma_model.set(gemma_models[0] if gemma_models else models[0])
+                messagebox.showinfo(
+                    "Models Loaded",
+                    f"Found {len(models)} Ollama models.",
+                    parent=self
+                )
+            else:
+                self._gemma_model_combo.configure(state="normal")
+                messagebox.showwarning(
+                    "No Models",
+                    "No Ollama models found. Make sure Ollama is running:\n"
+                    "  ollama serve",
+                    parent=self
+                )
+        except Exception as exc:
+            self._gemma_model_combo.configure(state="normal")
+            self._gemma_model_combo.set(self._settings.gemma_model)
+            messagebox.showerror(
+                "Refresh Failed",
+                f"Failed to fetch Ollama models:\n{exc}\n\n"
+                "Make sure Ollama is running:\n"
+                "  ollama serve",
+                parent=self
+            )
 
     def _on_save(self) -> None:
         data = {
@@ -1825,6 +2426,9 @@ class SettingsDialog(tk.Toplevel):
             "gemma_enabled": self._var_gemma_enabled.get(),
             "gemma_base_url": self._var_gemma_base_url.get().strip() or "http://localhost:11434/v1",
             "gemma_model": self._var_gemma_model.get().strip() or "gemma:300m",
+            "tool_output_max_bytes": self._var_tool_output_max_bytes.get(),
+            "context_truncation_enabled": self._var_context_truncation_enabled.get(),
+            "default_mode": self._var_default_mode.get(),
         }
         if data["agent_prompt"] == DEFAULT_AGENT_PROMPT:
             data["agent_prompt"] = None
@@ -1834,13 +2438,18 @@ class SettingsDialog(tk.Toplevel):
             messagebox.showerror("Settings", str(exc), parent=self)
             return
         
-        # Notify user that app restart is recommended for Gemma changes
+        # Notify user about changes
+        messages = []
         if self._settings.gemma_enabled != data["gemma_enabled"]:
-            messagebox.showinfo(
-                "Settings Saved",
-                "Gemma settings updated. Restart GlyphX for changes to take effect.",
-                parent=self
-            )
+            messages.append("Gemma settings updated. Restart GlyphX for changes to take effect.")
+        if (self._settings.tool_output_max_bytes != data["tool_output_max_bytes"] or
+            self._settings.context_truncation_enabled != data["context_truncation_enabled"]):
+            messages.append("Safety settings updated. Changes take effect immediately.")
+        if self._settings.default_mode != data["default_mode"]:
+            messages.append(f"Default mode changed to '{data['default_mode']}'. Will apply on next start.")
+        
+        if messages:
+            messagebox.showinfo("Settings Saved", "\n\n".join(messages), parent=self)
         
         self.destroy()
 

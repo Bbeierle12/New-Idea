@@ -8,12 +8,12 @@ GlyphX is a cross-platform desktop companion for managing and sharing your favor
 
 - **Glyphs panel**: add/edit/remove glyphs, double-click or press `Ctrl+R` to run, inspect command/cwd previews, search by name/tags/cmd, and import/export as JSON.
 - **Exporters**: generate Windows `.bat`, macOS `.command`, and Linux `.desktop` launchers with safe filenames and executable bits.
-- **Terminal panel**: interactive terminal emulator with command history, working directory management, color-coded output, and full shell command support—access your PC terminal directly within GlyphX.
-- **Chat tab**: configure API key/model/base URL, chat with the LLM (streamed responses), inspect tool calls (`[tool:*]`), and view token usage per exchange.
+- **Terminal panel**: interactive terminal emulator with command history, working directory management, color-coded output, and full shell command support—access your PC terminal directly within GlyphX. Now includes **🤖 AI Assistant** mode for natural language command suggestions. [Learn more](docs/TERMINAL_AI_GUIDE.md)
+- **AI Chat panel**: unified chat and agent interface (similar to VS Code Copilot) with mode toggle. Configure API key/model/base URL, chat with the LLM (streamed responses), or run one-shot agent goals. Both modes support tool calling and inspect tool invocations (`[tool:*]`). View token usage per exchange.
 - **Command history**: persistent log of the last 50 glyph/shell commands, visible alongside the glyph list.
-- **Agent tab**: run a one-shot agent loop with customizable system prompt that can call the same tools up to six steps before returning a concise summary.
 - **Worker + logging infra**: a dedicated background worker keeps the UI responsive, while structured logs accumulate in both the console pane and JSONL files (with automatic rotation).
 - **🤖 Gemma Background Worker**: Optional local AI assistant for auto-tagging glyphs, generating descriptions, summarizing terminal sessions, and more—all running offline via Ollama. [Learn more](docs/GEMMA_GUIDE.md)
+- **🔄 Model Dropdown**: Automatically fetch and select from available models for OpenAI, Ollama, or any OpenAI-compatible provider. [Learn more](docs/MODEL_DROPDOWN_GUIDE.md)
 
 ## Quick Start
 
@@ -50,9 +50,11 @@ python -m glyphx.app
 1. Open **Config > Settings...** (or press `Ctrl+,`) to enter your API key, preferred model, and base URL.
 2. Use the **Glyphs** panel (`Ctrl+N` to add) to define commands and double-click (or `Ctrl+R`) to run. Output is streamed to the Console tab.
 3. Switch to **Terminal** to execute shell commands interactively with full command history and working directory control.
-4. Switch to **Chat** to ask the assistant to list glyphs, run commands, or edit files. Tool invocations are logged with a `[tool]` prefix and appended to chat history.
-5. Switch to **Agent** to give the one-shot loop a goal (e.g., "List glyphs and write them to glyphs.txt") and review each tool call before the summary.
-6. Choose **File > Export...** to create OS-native launchers for your glyph library.
+4. Switch to **AI Chat** to interact with the LLM:
+   - Select **💬 Chat** mode for multi-turn conversations, tool calling, and streaming responses
+   - Select **🤖 Agent** mode for one-shot goal execution (e.g., "List glyphs and write them to glyphs.txt")
+   - Tool invocations are logged with a `[tool]` prefix in both modes
+5. Choose **File > Export...** to create OS-native launchers for your glyph library.
 
 Config, registry, logs, and chat history live in `%APPDATA%\glyphx\` on Windows (and the standard config directory on macOS/Linux).
 
